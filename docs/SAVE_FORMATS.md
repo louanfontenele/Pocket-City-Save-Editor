@@ -1,5 +1,7 @@
 # Save formats observed in the Steam builds
 
+The [Steam save schema notes](STEAM_SAVE_SCHEMA.md) cover optional fields, new-city defaults, and fields the games read together. The [field index](STEAM_SAVE_FIELDS.md) lists the first game's policy IDs and the second game's declared fields.
+
 ## Pocket City
 
 The Steam package starts at `resources/app/cdv-electron-main.js`. The renderer loaded by `index.html` uses a localized `app_<locale>.js` bundle. The English bundle contains `ElectronFileStorage`, which requests Electron's `userData` directory through a preload bridge. The older Cordova `FileStorage` class is also shipped and uses different filenames.
