@@ -48,7 +48,7 @@ impl Collection {
             Self::Survival | Self::CitySurvival => "upgrades",
             Self::AutoSell => "auto_sell",
             Self::AutoConvert => "auto_convert",
-            Self::GlobalFlags => "flags",
+            Self::GlobalFlags => "game_records",
         }
     }
 

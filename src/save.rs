@@ -235,8 +235,14 @@ impl Field {
         self.initial != self.value
     }
 
+    pub fn is_game_record(&self, game: Game) -> bool {
+        game == Game::Two
+            && (Collection::GlobalFlags.matches(&self.path) || self.path.starts_with("flags."))
+    }
+
     pub fn locked(&self, game: Game) -> bool {
         game.protected(&self.path)
+            || self.is_game_record(game)
             || (game == Game::Two
                 && [Collection::Buildings, Collection::DisabledResearch]
                     .iter()

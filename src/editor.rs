@@ -373,6 +373,17 @@ impl Editor {
         let mut action = None;
         let pending = document.changed();
         document_banner(ui, document, locale);
+        if matches!(
+            archive_key(&document.path),
+            "auto_archive" | "manual_archive"
+        ) && !document.pc2_survival()
+        {
+            ui.label(
+                RichText::new(locale.text("archive_edit_help"))
+                    .color(MUTED)
+                    .size(13.0),
+            );
+        }
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
             let save_button = egui::Button::new(
@@ -544,6 +555,8 @@ impl Editor {
                         ui.label(RichText::new(locale.text("building_help")).color(MUTED));
                     } else if self.collection.is_resource_automation() {
                         ui.label(RichText::new(locale.text("auto_help")).color(MUTED));
+                    } else if self.collection == Collection::GlobalFlags {
+                        ui.label(RichText::new(locale.text("game_records_help")).color(MUTED));
                     }
                 }
             }
@@ -621,7 +634,27 @@ impl Editor {
                                                 && save::PC2_SANDBOX_FLAGS
                                                     .contains(&field.path.as_str())
                                                 && field.value == "false");
+                                        let is_record = field.is_game_record(game);
+                                        let record_help = if is_record {
+                                            let id =
+                                                field.path.split_once('.').map_or("", |(_, id)| id);
+                                            locale.get(&format!("record_{id}_help"))
+                                        } else {
+                                            None
+                                        };
+                                        let description = record_help.or_else(|| {
+                                            let key = match field.path.as_str() {
+                                                "money" | "stats.money" => "money_help",
+                                                "level" | "stats.level" => "level_help",
+                                                "unlockAll" if game == Game::Two => {
+                                                    "unlock_all_help"
+                                                }
+                                                _ => return None,
+                                            };
+                                            locale.get(key)
+                                        });
                                         let label = if locked
+                                            && !is_record
                                             && !Collection::Buildings.matches(&field.path)
                                         {
                                             format!("{label} · {}", locale.text("protected"))
@@ -632,8 +665,26 @@ impl Editor {
                                             RichText::new(&label).color(label_color),
                                         )
                                         .truncate();
-                                        let label_response = ui
-                                            .allocate_ui_with_layout(
+                                        let label_response = if let Some(description) = description
+                                        {
+                                            ui.allocate_ui_with_layout(
+                                                egui::vec2(label_width, 0.0),
+                                                Layout::top_down(Align::Min),
+                                                |ui| {
+                                                    ui.set_max_width(label_width);
+                                                    let title =
+                                                        ui.add(row).on_hover_text(&field.path);
+                                                    ui.label(
+                                                        RichText::new(description)
+                                                            .color(MUTED)
+                                                            .size(13.0),
+                                                    );
+                                                    title
+                                                },
+                                            )
+                                            .inner
+                                        } else {
+                                            ui.allocate_ui_with_layout(
                                                 egui::vec2(label_width, 30.0),
                                                 Layout::left_to_right(Align::Center),
                                                 |ui| {
@@ -643,8 +694,21 @@ impl Editor {
                                                     ))
                                                 },
                                             )
-                                            .inner;
+                                            .inner
+                                        };
                                         ui.push_id((shown, &field.path), |ui| {
+                                            if is_record {
+                                                let status = if record_help.is_some() {
+                                                    "tip_seen"
+                                                } else {
+                                                    "recorded"
+                                                };
+                                                ui.label(
+                                                    RichText::new(locale.text(status)).color(MUTED),
+                                                )
+                                                .labelled_by(label_response.id);
+                                                return;
+                                            }
                                             ui.add_enabled_ui(!locked, |ui| {
                                                 if field.kind == Kind::Boolean {
                                                     let mut checked = field.value == "true";
@@ -1175,6 +1239,12 @@ fn field_name(path: &str, fallback: &str, locale: Locale) -> String {
         && let Ok(id) = id.parse::<i32>()
     {
         match group {
+            "globalFlags" | "flags" => {
+                return locale.get(&format!("record_{id}")).map_or_else(
+                    || format!("{} · {}", locale.text("record"), id),
+                    str::to_owned,
+                );
+            }
             "maxLevelReached" | "maxPopulationReached" => {
                 let key = if group == "maxLevelReached" {
                     "max_level_record"
