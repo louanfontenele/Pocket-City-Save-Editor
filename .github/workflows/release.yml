@@ -1,0 +1,56 @@
+name: Publish Windows release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  windows-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --no-self-update
+
+      - name: Validate tag
+        shell: pwsh
+        run: |
+          $manifest = cargo +stable metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $version = $manifest.packages[0].version
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            throw "The release tag must match Cargo.toml (v$version)."
+          }
+
+      - name: Test and build
+        shell: pwsh
+        run: |
+          cargo +stable test --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +stable build --release --locked
+
+      - name: Package executable
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path release | Out-Null
+          $archive = "pocket-city-save-editor-$env:GITHUB_REF_NAME-windows-x64.zip"
+          Compress-Archive -LiteralPath 'target/release/pocket-city-save-editor.exe' -DestinationPath "release/$archive"
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath "release/$archive").Hash.ToLowerInvariant()
+          "$hash  $archive" | Set-Content -LiteralPath "release/$archive.sha256" -Encoding ascii
+          "RELEASE_ARCHIVE=$archive" >> $env:GITHUB_ENV
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $releaseFlags = @('--verify-tag', '--generate-notes', '--title', "Pocket City Save Editor $env:GITHUB_REF_NAME")
+          if ($env:GITHUB_REF_NAME -match '-') { $releaseFlags += '--prerelease' }
+          gh release create $env:GITHUB_REF_NAME "release/$env:RELEASE_ARCHIVE" "release/$env:RELEASE_ARCHIVE.sha256" @releaseFlags
