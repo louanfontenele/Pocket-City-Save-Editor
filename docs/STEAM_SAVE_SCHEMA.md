@@ -2,6 +2,8 @@
 
 This pass used the installed game files as inputs. The companion [field index](STEAM_SAVE_FIELDS.md) includes 33 PC1 policies, all 127 declared PC2 city fields, and PC2's preference, display, Survival and pet state types. See [save formats](SAVE_FORMATS.md) for the file wrappers and [PC2 save lifecycle](POCKET_CITY_2_SAVES.md) for archive recovery and sandbox classification.
 
+The [progression rules](STEAM_PROGRESSION.md) trace missions, rewards, research and unlocks. The [progression catalogs](STEAM_PROGRESSION_CATALOGS.md) list quest IDs, research nodes and affinity buildings from the installed builds.
+
 | Steam build | Installed artifact | SHA-256 |
 | --- | --- | --- |
 | Pocket City `9765658` | `Pocket City.exe` | `c2222de98bdd0fa7825391c82d596fdea6b6f039ebe377a6fb099e12369d0ab3` |
