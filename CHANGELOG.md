@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-- Rebuilt the desktop interface with GPUI Kit, including the save library, progression controls and native tax sliders.
+- Rebuilt the desktop interface with Tauri 2, React, and shadcn/ui while keeping the Rust save engine.
+- Adopted the official shadcn sidebar-07 block for editor navigation and the save library.
+- Added compact dashboard cards and light, dark, and system appearance options using the default shadcn theme.
 
 - Added a Progression tab with Pocket City chest rewards, city policies, and quest objectives ready for in-game reward collection.
 - Added Pocket City 2 research states, adopted pet well-being and follower controls, and per-event cooldown removal.

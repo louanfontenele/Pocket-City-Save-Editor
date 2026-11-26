@@ -1,13 +1,15 @@
 # Pocket City Save Editor 2.0
 
-Um aplicativo desktop em Rust com GPUI Kit para editar saves locais de **Pocket City** e **Pocket City 2**. Funciona sem conexão com a internet. O seletor de idioma oferece português brasileiro, inglês, japonês, francês, italiano, alemão, espanhol da Espanha, tcheco, coreano, russo, chinês simplificado, espanhol da América Latina e ucraniano.
+Um aplicativo desktop Tauri 2 com interface React e shadcn/ui para editar saves locais de **Pocket City** e **Pocket City 2**. O motor de saves é escrito em Rust. O aplicativo funciona sem conexão com a internet. O seletor de idioma oferece português brasileiro, inglês, japonês, francês, italiano, alemão, espanhol da Espanha, tcheco, coreano, russo, chinês simplificado, espanhol da América Latina e ucraniano.
 
 ## Como usar
 
 1. Feche o jogo antes de editar o save.
 2. Selecione o jogo na barra lateral. A biblioteca procura arquivos nas pastas padrão do Windows. Use **Abrir arquivo**, arraste um save para a janela ou adicione outra pasta.
-3. Edite os campos em **Visão geral**, **Coleções**, **Progressão** ou **Campos avançados**. Em Pocket City, selecione a versão automática ou manual da cidade.
+3. Use o grupo **Editor** na barra lateral para acessar **Visão geral**, **Coleções**, **Progressão** ou **Campos avançados**. Em Pocket City, selecione a versão automática ou manual da cidade.
 4. Clique em **Salvar alterações** para substituir o arquivo e guardar o original. **Exportar cópia** grava em um novo caminho. Para voltar a uma versão anterior, use **Backups**.
+
+O menu **Aparência** no cabeçalho alterna entre os temas claro, escuro e do sistema.
 
 O editor cria backups em `.pocket-city-editor-backups` ao lado do save. A biblioteca distingue saves principais e históricos de Pocket City 2. Ao reabrir uma cidade nesse jogo, o próprio jogo escolhe qual arquivo carregar. Confira se o arquivo editado é a versão que pretende abrir.
 
@@ -30,16 +32,20 @@ Os metadados da cidade de Pocket City 1, os IDs estruturais e as dimensões da m
 
 ## Build local
 
+No Windows, use Node.js 24, Rust stable, as ferramentas de compilação MSVC e o WebView2.
+
 ```powershell
-cargo run --release
-cargo test
-cargo clippy --all-targets -- -D warnings
+npm ci
+npm run tauri -- dev
+cargo test --locked
+cargo clippy --locked --all-targets -- -D warnings
+npm run tauri -- build --no-bundle -- --locked
 ```
 
-O executável Windows fica em `target/release/pocket-city-save-editor.exe`. Use um caminho de arquivo como argumento opcional para abrir um save diretamente.
+O executável Windows fica em `target/release/pocket-city-save-editor.exe`. Ele contém a interface e abre sem um servidor Vite. Use um caminho de arquivo como argumento opcional para abrir um save diretamente. Omita `--no-bundle` para gerar também um instalador NSIS.
 
 Consulte [SAVE_FORMATS.md](docs/SAVE_FORMATS.md) para detalhes da investigação e da compatibilidade.
 
 ## Publicação
 
-Uma tag no formato `vX.Y.Z` que corresponda à versão de `Cargo.toml` aciona o GitHub Actions. O workflow executa os testes, compila o executável Windows x64 e publica um ZIP e seu checksum SHA-256 na release.
+Uma tag no formato `vX.Y.Z` que corresponda à versão de `Cargo.toml` aciona o GitHub Actions. O workflow instala as dependências do frontend, executa os testes Rust, compila o executável Tauri para Windows x64 e publica um ZIP e seu checksum SHA-256 na release.

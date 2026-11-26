@@ -16,8 +16,16 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal --no-self-update
+
+      - name: Install frontend dependencies
+        run: npm ci
 
       - name: Validate tag
         shell: pwsh
@@ -31,10 +39,12 @@ jobs:
 
       - name: Test and build
         shell: pwsh
+        env:
+          RUSTUP_TOOLCHAIN: stable
         run: |
-          cargo +stable test --locked
+          cargo test --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo +stable build --release --locked
+          npm run tauri -- build --no-bundle --ci -- --locked
 
       - name: Package executable
         shell: pwsh

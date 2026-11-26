@@ -1,6 +1,17 @@
 app|Editor de saves 2.0|Save editor 2.0|セーブエディター 2.0|Éditeur de sauvegardes 2.0|Editor salvataggi 2.0|Spielstandeditor 2.0|Editor de partidas 2.0|Editor uložených her 2.0|저장 파일 편집기 2.0|Редактор сохранений 2.0|存档编辑器 2.0|Editor de partidas 2.0|Редактор збережень 2.0
+yes|Sim|Yes|はい|Oui|Sì|Ja|Sí|Ano|예|Да|是|Sí|Так
+no|Não|No|いいえ|Non|No|Nein|No|Ne|아니요|Нет|否|No|Ні
+previous_page|Página anterior|Previous page|前のページ|Page précédente|Pagina precedente|Vorherige Seite|Página anterior|Předchozí stránka|이전 페이지|Предыдущая страница|上一页|Página anterior|Попередня сторінка
+toggle_sidebar|Alternar barra lateral|Toggle sidebar|サイドバーを切り替え|Afficher ou masquer la barre latérale|Mostra o nascondi la barra laterale|Seitenleiste umschalten|Alternar barra lateral|Přepnout postranní panel|사이드바 전환|Переключить боковую панель|切换侧栏|Alternar barra lateral|Перемкнути бічну панель
+skip_to_content|Ir para o conteúdo|Skip to content|コンテンツへ移動|Aller au contenu|Vai al contenuto|Zum Inhalt springen|Ir al contenido|Přejít na obsah|콘텐츠로 이동|Перейти к содержанию|跳转到内容|Ir al contenido|Перейти до вмісту
+appearance|Aparência|Appearance|外観|Apparence|Aspetto|Darstellung|Apariencia|Vzhled|모양|Оформление|外观|Apariencia|Оформлення
+theme_light|Claro|Light|ライト|Clair|Chiaro|Hell|Claro|Světlý|라이트|Светлая|浅色|Claro|Світла
+theme_dark|Escuro|Dark|ダーク|Sombre|Scuro|Dunkel|Oscuro|Tmavý|다크|Тёмная|深色|Oscuro|Темна
+theme_system|Sistema|System|システム|Système|Sistema|System|Sistema|Systém|시스템|Системная|跟随系统|Sistema|Системна
+next_page|Próxima página|Next page|次のページ|Page suivante|Pagina successiva|Nächste Seite|Página siguiente|Další stránka|다음 페이지|Следующая страница|下一页|Página siguiente|Наступна сторінка
 language|Idioma|Language|言語|Langue|Lingua|Sprache|Idioma|Jazyk|언어|Язык|语言|Idioma|Мова
 library|Biblioteca|Library|ライブラリ|Bibliothèque|Raccolta|Bibliothek|Biblioteca|Knihovna|라이브러리|Библиотека|存档库|Biblioteca|Бібліотека
+editor_sections|Editor|Editor|エディター|Éditeur|Editor|Editor|Editor|Editor|편집기|Редактор|编辑器|Editor|Редактор
 refresh|Atualizar|Refresh|更新|Actualiser|Aggiorna|Aktualisieren|Actualizar|Obnovit|새로 고침|Обновить|刷新|Actualizar|Оновити
 no_files|Nenhum arquivo encontrado.|No files found.|ファイルが見つかりません。|Aucun fichier trouvé.|Nessun file trovato.|Keine Dateien gefunden.|No se encontraron archivos.|Nebyly nalezeny žádné soubory.|파일을 찾을 수 없습니다.|Файлы не найдены.|未找到文件。|No se encontraron archivos.|Файлів не знайдено.
 open|Abrir arquivo…|Open file…|ファイルを開く…|Ouvrir un fichier…|Apri file…|Datei öffnen…|Abrir archivo…|Otevřít soubor…|파일 열기…|Открыть файл…|打开文件…|Abrir archivo…|Відкрити файл…
