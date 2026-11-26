@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Rebuilt the desktop interface with GPUI Kit, including the save library, progression controls and native tax sliders.
+
 - Added a Progression tab with Pocket City chest rewards, city policies, and quest objectives ready for in-game reward collection.
 - Added Pocket City 2 research states, adopted pet well-being and follower controls, and per-event cooldown removal.
 - Added tax controls and debt clearing for both games, using each game's tax units and loan representation.

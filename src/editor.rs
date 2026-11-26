@@ -1,41 +1,47 @@
 use crate::{
-    catalog::{Collection, MAX_AFFINITY, RESEARCH},
+    catalog::{Collection, MAX_AFFINITY},
     locale::Locale,
-    progression_catalog::{CHEST_BUILDINGS, EVENTS, PC1_QUESTS, PETS, POLICIES, RESEARCH_PARENTS},
-    save::{
-        self, Game, Kind, Save,
-        progress::{
-            PC1_TAX_PRESETS, PC2_MAX_TAX_PERCENT, Progress, QuestState, ResearchState, TAX_LABELS,
-        },
-    },
+    save::{self, Game, Kind, Save},
 };
-use eframe::egui::{self, Align, Color32, Frame, Layout, Margin, RichText, Stroke, TextEdit};
-use std::path::{Path, PathBuf};
+use gpui_kit::{base::StyledExt, prelude::FluentBuilder};
+use gpui_kit::{
+    component::{
+        ActiveTheme, Disableable, IconName, Sizable,
+        alert::Alert,
+        button::{Button, ButtonVariants},
+        checkbox::Checkbox,
+        form::{self, h_form},
+        group_box::{GroupBox, GroupBoxVariants},
+        input::{Input, InputEvent, InputState},
+        label::Label,
+        menu::{DropdownMenu, PopupMenuItem},
+        progress::Progress as ProgressBar,
+        sidebar::{
+            Sidebar, SidebarFooter, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuItem,
+        },
+        slider::{Slider, SliderEvent, SliderState},
+        tab::{Tab as KitTab, TabBar},
+        toolbar::Toolbar,
+    },
+    *,
+};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
-const BG: Color32 = Color32::from_rgb(19, 25, 39);
-const SIDEBAR: Color32 = Color32::from_rgb(24, 32, 49);
-const SURFACE: Color32 = Color32::from_rgb(31, 42, 63);
-const HEADER: Color32 = Color32::from_rgb(36, 50, 77);
-const BORDER: Color32 = Color32::from_rgb(57, 74, 105);
-const MUTED: Color32 = Color32::from_rgb(172, 188, 212);
-const INK: Color32 = Color32::from_rgb(249, 246, 232);
-const WARM: Color32 = Color32::from_rgb(255, 198, 93);
-const ERROR: Color32 = Color32::from_rgb(255, 166, 154);
-const POCKET_CITY_COLORS: [Color32; 3] = [
-    Color32::from_rgb(147, 167, 241),
-    WARM,
-    Color32::from_rgb(163, 205, 99),
-];
-const POCKET_CITY_2_COLORS: [Color32; 3] = [
-    Color32::from_rgb(100, 206, 242),
-    Color32::from_rgb(255, 159, 126),
-    Color32::from_rgb(168, 221, 118),
-];
+mod progression;
 
-fn logo_colors(game: Game) -> [Color32; 3] {
+const BG: u32 = 0x12161b;
+const BORDER: u32 = 0x323c47;
+const INK: u32 = 0xf4f4f5;
+const MUTED: u32 = 0xa7b1bf;
+const PAGE_SIZE: usize = 32;
+
+fn accent(game: Game) -> u32 {
     match game {
-        Game::One => POCKET_CITY_COLORS,
-        Game::Two => POCKET_CITY_2_COLORS,
+        Game::One => 0xffc65d,
+        Game::Two => 0x64cef2,
     }
 }
 
@@ -45,7 +51,7 @@ struct Entry {
     game: Game,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
     City,
     Collections,
@@ -59,98 +65,90 @@ pub struct Editor {
     library: Vec<Entry>,
     folders: Vec<PathBuf>,
     current: Option<Save>,
-    query: String,
     tab: Tab,
     notice: Option<(bool, String)>,
     restore: Option<PathBuf>,
     snapshot: usize,
     collection: Collection,
-    progress_section: usize,
     locale: Locale,
+    section: usize,
+    page: usize,
+    query: Entity<InputState>,
+    inputs: HashMap<usize, (Entity<InputState>, Subscription)>,
+    sliders: HashMap<SliderKey, (Entity<SliderState>, Subscription)>,
+    _search_subscription: Subscription,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum SliderKey {
+    Tax(usize),
+    Pet(i32),
+}
+
+fn locale_path() -> Option<PathBuf> {
+    std::env::var_os("APPDATA")
+        .or_else(|| std::env::var_os("XDG_CONFIG_HOME"))
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .map(|base| base.join("Pocket City Save Editor").join("language"))
 }
 
 impl Editor {
-    pub fn new(creation: &eframe::CreationContext<'_>) -> Self {
-        let locale = creation
-            .storage
-            .and_then(|storage| storage.get_string("locale"))
-            .map_or_else(Locale::default, |code| Locale::from_code(&code));
-        locale.install_fonts(&creation.egui_ctx);
-        let mut style = (*creation.egui_ctx.style()).clone();
-        let mut visuals = egui::Visuals::dark();
-        visuals.override_text_color = Some(INK);
-        visuals.panel_fill = BG;
-        visuals.window_fill = SURFACE;
-        visuals.window_stroke = Stroke::new(1.0_f32, BORDER);
-        visuals.extreme_bg_color = BG;
-        visuals.selection.bg_fill = Color32::from_rgb(42, 70, 105);
-        visuals.selection.stroke = Stroke::new(1.0_f32, POCKET_CITY_2_COLORS[0]);
-        visuals.faint_bg_color = Color32::from_rgb(37, 49, 71);
-        for widget in [
-            &mut visuals.widgets.inactive,
-            &mut visuals.widgets.hovered,
-            &mut visuals.widgets.active,
-        ] {
-            widget.weak_bg_fill = SURFACE;
-            widget.bg_fill = SURFACE;
-            widget.bg_stroke = Stroke::new(1.0_f32, BORDER);
-            widget.corner_radius = 6.into();
-        }
-        visuals.widgets.hovered.bg_fill = BORDER;
-        visuals.widgets.hovered.weak_bg_fill = BORDER;
-        visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, POCKET_CITY_2_COLORS[0]);
-        style.visuals = visuals;
-        style.spacing.item_spacing = egui::vec2(10.0, 8.0);
-        style.spacing.button_padding = egui::vec2(12.0, 8.0);
-        style.spacing.interact_size.y = 31.0;
-        style
-            .text_styles
-            .insert(egui::TextStyle::Body, egui::FontId::proportional(15.0));
-        style
-            .text_styles
-            .insert(egui::TextStyle::Button, egui::FontId::proportional(14.0));
-        creation.egui_ctx.set_style(style);
-
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let locale = locale_path()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .map(|code| Locale::from_code(code.trim()))
+            .unwrap_or_default();
+        let query =
+            cx.new(|cx| InputState::new(window, cx).placeholder(locale.text("search").to_owned()));
+        let search_subscription = cx.subscribe(&query, |this, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                this.page = 0;
+                cx.notify();
+            }
+        });
         let mut editor = Self {
-            game: Game::Two,
+            game: Game::One,
             library: Vec::new(),
             folders: save::default_folders()
                 .into_iter()
                 .filter(|p| p.is_dir())
                 .collect(),
             current: None,
-            query: String::new(),
             tab: Tab::City,
             notice: None,
             restore: None,
             snapshot: 0,
             collection: Collection::Affinity,
-            progress_section: 0,
             locale,
+            section: 0,
+            page: 0,
+            query,
+            inputs: HashMap::new(),
+            sliders: HashMap::new(),
+            _search_subscription: search_subscription,
         };
         editor.refresh();
-        editor.game = editor.library.first().map_or(Game::One, |entry| entry.game);
-        if let Some(path) = std::env::args_os().nth(1).map(PathBuf::from) {
-            editor.open(&path);
-        } else if let Some(path) = editor
-            .library
-            .iter()
-            .filter(|entry| archive_key(&entry.path) == "main")
-            .max_by_key(|entry| {
-                entry
-                    .path
-                    .metadata()
-                    .and_then(|metadata| metadata.modified())
-                    .ok()
-            })
-            .map(|entry| entry.path.clone())
-        {
+        let initial = std::env::args_os().nth(1).map(PathBuf::from).or_else(|| {
+            editor
+                .library
+                .iter()
+                .filter(|entry| archive_key(&entry.path) == "main")
+                .max_by_key(|entry| {
+                    std::fs::metadata(&entry.path)
+                        .and_then(|meta| meta.modified())
+                        .ok()
+                })
+                .map(|entry| entry.path.clone())
+        });
+        if let Some(path) = initial {
             editor.open(&path);
         }
         editor
     }
 
     fn refresh(&mut self) {
+        self.library.retain(|entry| entry.path.is_file());
         for folder in self.folders.clone() {
             match save::scan(&folder) {
                 Ok(paths) => {
@@ -160,18 +158,11 @@ impl Editor {
                         }
                     }
                 }
-                Err(error) => {
-                    self.status(true, format!("{}\n{error:#}", self.locale.text("failed")))
-                }
+                Err(error) => self.failure(error),
             }
         }
-        self.library.retain(|entry| entry.path.is_file());
-        self.library.sort_by(|a, b| {
-            a.title
-                .to_lowercase()
-                .cmp(&b.title.to_lowercase())
-                .then_with(|| a.path.cmp(&b.path))
-        });
+        self.library
+            .sort_by_cached_key(|entry| (entry.title.to_lowercase(), entry.path.clone()));
     }
 
     fn remember(&mut self, document: &Save) {
@@ -190,25 +181,31 @@ impl Editor {
         }
     }
 
-    fn status(&mut self, error: bool, message: impl Into<String>) {
-        self.notice = Some((error, message.into()));
+    fn reset_controls(&mut self) {
+        self.sliders.clear();
+        self.inputs.clear();
+        self.page = 0;
+        self.restore = None;
+    }
+
+    fn failure(&mut self, error: impl std::fmt::Display) {
+        self.notice = Some((true, format!("{}\n{error:#}", self.locale.text("failed"))));
     }
 
     fn open(&mut self, path: &Path) {
-        let locale = self.locale;
         if self
             .current
             .as_ref()
             .is_some_and(|save| save.changed() != 0)
         {
-            self.status(true, locale.text("pending_guard"));
+            self.notice = Some((true, self.locale.text("pending_guard").to_owned()));
             return;
         }
         match Save::open(path) {
             Ok(document) => {
-                self.game = document.game;
                 self.snapshot = document.latest;
-                self.remember(&document);
+                self.game = document.game;
+                self.section = 0;
                 self.tab = if document
                     .fields
                     .iter()
@@ -218,749 +215,947 @@ impl Editor {
                 } else {
                     Tab::Advanced
                 };
+                self.reset_controls();
+                self.remember(&document);
                 self.current = Some(document);
-                self.query.clear();
                 self.notice = None;
             }
-            Err(error) => self.status(true, format!("{}\n{error:#}", self.locale.text("failed"))),
+            Err(error) => self.failure(error),
         }
     }
 
-    fn sidebar(&mut self, ctx: &egui::Context) {
+    fn settle(&mut self, result: anyhow::Result<Save>, key: &str) {
+        match result {
+            Ok(save) => {
+                self.snapshot = self.snapshot.min(save.snapshots.len() - 1);
+                self.reset_controls();
+                self.remember(&save);
+                self.current = Some(save);
+                self.notice = Some((false, self.locale.text(key).to_owned()));
+            }
+            Err(error) => self.failure(error),
+        }
+    }
+
+    fn set_language(&mut self, code: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.locale = Locale::from_code(code);
+        self.query.update(cx, |state, cx| {
+            state.set_placeholder(self.locale.text("search").to_owned(), window, cx);
+        });
+        if let Some(path) = locale_path()
+            && let Some(dir) = path.parent()
+            && let Err(error) =
+                std::fs::create_dir_all(dir).and_then(|()| std::fs::write(path, code))
+        {
+            self.failure(error);
+        }
+    }
+
+    fn open_button(&self, cx: &Context<Self>, id: &'static str, primary: bool) -> Button {
+        action(
+            cx,
+            id,
+            self.locale.text("open"),
+            primary,
+            true,
+            |this, window, cx| {
+                if let Some(path) = rfd::FileDialog::new().pick_file() {
+                    this.open(&path);
+                    if this.notice.is_none() {
+                        this.query
+                            .update(cx, |state, cx| state.set_value("", window, cx));
+                    }
+                }
+            },
+        )
+    }
+
+    fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let locale = self.locale;
-        egui::SidePanel::left("library")
-            .exact_width(262.0)
-            .resizable(false)
-            .frame(
-                Frame::new()
-                    .fill(SIDEBAR)
-                    .inner_margin(Margin::same(18))
-                    .stroke(Stroke::new(1.0_f32, BORDER)),
+        let header = SidebarHeader::new().child(
+            div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .w_full()
+                .child(
+                    div()
+                        .w_8()
+                        .h_8()
+                        .rounded_md()
+                        .bg(rgb(accent(self.game)))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .font_bold()
+                        .child(Label::new("PC").text_color(rgb(BG))),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .child(div().font_semibold().child(Label::new("Pocket City")))
+                        .child(subtle(locale.text("app"))),
+                ),
+        );
+        let games = TabBar::new("game-selector")
+            .segmented()
+            .small()
+            .selected_index(usize::from(self.game == Game::Two))
+            .children(
+                [Game::One, Game::Two]
+                    .into_iter()
+                    .map(|game| KitTab::new().label(game.title())),
             )
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    let (rect, _) =
-                        ui.allocate_exact_size(egui::vec2(33.0, 33.0), egui::Sense::hover());
-                    let paint = ui.painter();
-                    paint.rect_filled(rect, 8.0, HEADER);
-                    let colors = logo_colors(self.game);
-                    for ((x, height), color) in [(7.0, 10.0), (14.0, 20.0), (21.0, 15.0)]
-                        .into_iter()
-                        .zip(colors)
-                    {
-                        let origin = rect.left_bottom() + egui::vec2(x, -7.0 - height);
-                        paint.rect_filled(
-                            egui::Rect::from_min_size(origin, egui::vec2(5.0, height)),
-                            1.0,
-                            color,
-                        );
-                    }
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new("Pocket City").strong().size(20.0));
-                        ui.label(RichText::new(locale.text("app")).color(MUTED).size(13.0));
-                    });
-                });
-                ui.horizontal(|ui| {
-                    ui.label(locale.text("language"));
-                    egui::ComboBox::from_id_salt("editor-language")
-                        .selected_text(self.locale.name())
-                        .show_ui(ui, |ui| {
-                            for (code, name) in Locale::ALL {
-                                ui.selectable_value(
-                                    &mut self.locale,
-                                    Locale::from_code(code),
-                                    name,
-                                );
-                            }
-                        });
-                });
-                if self.locale != locale {
-                    self.locale.install_fonts(ctx);
-                    self.query.clear();
-                    self.notice = None;
-                    ctx.request_repaint();
-                }
-                ui.add_space(22.0);
-                for game in [Game::One, Game::Two] {
-                    if ui
-                        .add_sized(
-                            [ui.available_width(), 36.0],
-                            egui::Button::selectable(self.game == game, game.title()),
-                        )
-                        .clicked()
-                    {
-                        if self
-                            .current
-                            .as_ref()
-                            .is_some_and(|save| save.game != game && save.changed() != 0)
-                        {
-                            self.status(true, locale.text("pending_guard"));
+            .on_click(cx.listener(|this, index: &usize, _, cx| {
+                this.game = if *index == 0 { Game::One } else { Game::Two };
+                cx.notify();
+            }));
+        let mut groups = Vec::new();
+        for kind in ["main", "auto_archive", "manual_archive", "global"] {
+            let items = self
+                .library
+                .iter()
+                .filter(|entry| entry.game == self.game && archive_key(&entry.path) == kind)
+                .map(|entry| {
+                    let path = entry.path.clone();
+                    let selected = self.current.as_ref().is_some_and(|doc| doc.path == path);
+                    let title = settings_title(&path, locale)
+                        .unwrap_or(&entry.title)
+                        .to_owned();
+                    SidebarMenuItem::new(title.clone())
+                        .icon(if kind == "main" {
+                            IconName::BookOpen
                         } else {
-                            self.game = game;
-                            if self.current.as_ref().is_some_and(|save| save.game != game) {
-                                self.current = None;
+                            IconName::Inbox
+                        })
+                        .accessibility_label(format!("{title}, {}", locale.text(kind)))
+                        .active(selected)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.open(&path);
+                            if this.notice.is_none() {
+                                this.query
+                                    .update(cx, |state, cx| state.set_value("", window, cx));
                             }
-                        }
-                    }
-                }
-                ui.add_space(16.0);
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(locale.text("library")).strong());
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.small_button(locale.text("refresh")).clicked() {
-                            self.refresh();
-                        }
-                    });
-                });
-
-                let mut opened = None;
-                let height = (ui.available_height() - 112.0).max(34.0);
-                egui::ScrollArea::vertical()
-                    .id_salt("files")
-                    .max_height(height)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        for entry in self.library.iter().filter(|entry| entry.game == self.game) {
-                            let active = self
-                                .current
-                                .as_ref()
-                                .is_some_and(|save| save.path == entry.path);
-                            let response = library_row(ui, entry, active, locale);
-                            if response.clicked() && !active {
-                                opened = Some(entry.path.clone());
-                            }
-                        }
-                        if self.library.iter().all(|entry| entry.game != self.game) {
-                            ui.label(RichText::new(locale.text("no_files")).color(MUTED));
-                        }
-                    });
-                if let Some(path) = opened {
-                    self.open(&path);
-                }
-
-                if ui
-                    .add_sized(
-                        [ui.available_width(), 34.0],
-                        egui::Button::new(locale.text("open")),
+                            cx.notify();
+                        }))
+                })
+                .collect::<Vec<_>>();
+            if !items.is_empty() {
+                groups.push(
+                    SidebarGroup::new(locale.text(kind)).child(SidebarMenu::new().children(items)),
+                );
+            }
+        }
+        let editor = cx.weak_entity();
+        let language = Button::new("language")
+            .label(locale.name())
+            .icon(IconName::ChevronDown)
+            .small()
+            .ghost()
+            .dropdown_menu(move |menu, _, _| {
+                Locale::ALL.into_iter().fold(menu, |menu, (code, name)| {
+                    let editor = editor.clone();
+                    menu.item(
+                        PopupMenuItem::new(name)
+                            .checked(locale.code() == code)
+                            .on_click(move |_, window, cx| {
+                                let _ = editor.update(cx, |this, cx| {
+                                    this.set_language(code, window, cx);
+                                    cx.notify();
+                                });
+                            }),
                     )
-                    .clicked()
-                    && let Some(path) = rfd::FileDialog::new().pick_file()
-                {
-                    self.open(&path);
-                }
-                if ui
-                    .add_sized(
-                        [ui.available_width(), 34.0],
-                        egui::Button::new(locale.text("folder")),
-                    )
-                    .clicked()
-                    && let Some(folder) = rfd::FileDialog::new().pick_folder()
-                {
-                    if !self.folders.contains(&folder) {
-                        self.folders.push(folder);
-                    }
-                    self.refresh();
-                }
+                })
             });
+        let footer = SidebarFooter::new().child(
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(self.open_button(cx, "open", false).w_full())
+                .child(
+                    action(
+                        cx,
+                        "folder",
+                        locale.text("folder"),
+                        false,
+                        true,
+                        |this, _, _| {
+                            if let Some(folder) = rfd::FileDialog::new().pick_folder()
+                                && !this.folders.contains(&folder)
+                            {
+                                this.folders.push(folder);
+                                this.refresh();
+                            }
+                        },
+                    )
+                    .w_full(),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_2()
+                        .child(subtle(locale.text("language")))
+                        .child(language),
+                ),
+        );
+        Sidebar::new("save-library")
+            .w(px(280.0))
+            .collapsible(false)
+            .header(
+                div()
+                    .flex()
+                    .flex_col()
+                    .w_full()
+                    .gap_3()
+                    .child(header)
+                    .child(games)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(subtle(locale.text("library")))
+                            .child(
+                                action(
+                                    cx,
+                                    "refresh",
+                                    locale.text("refresh"),
+                                    false,
+                                    true,
+                                    |this, _, _| this.refresh(),
+                                )
+                                .ghost(),
+                            ),
+                    )
+                    .when(groups.is_empty(), |header| {
+                        header.child(subtle(locale.text("no_files")))
+                    }),
+            )
+            .children(groups)
+            .footer(footer)
     }
 
-    fn document(&mut self, ui: &mut egui::Ui) {
+    fn document(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let locale = self.locale;
-        let Some(document) = self.current.as_mut() else {
-            ui.add_space(50.0);
-            ui.vertical_centered(|ui| {
-                ui.label(RichText::new(self.game.title()).size(32.0).strong());
-                ui.label(RichText::new(locale.text("choose")).color(MUTED));
-                if let Some((_, message)) = &self.notice {
-                    ui.label(RichText::new(message).color(ERROR));
-                }
-            });
-            return;
+        let Some(document) = self.current.as_ref() else {
+            return div()
+                .flex()
+                .flex_col()
+                .items_start()
+                .justify_center()
+                .gap_3()
+                .flex_1()
+                .p_8()
+                .child(Label::new(self.game.title()).text_3xl().font_semibold())
+                .child(subtle(locale.text("choose")))
+                .child(self.open_button(cx, "empty-open", true))
+                .when_some(self.notice.as_ref(), |view, (_, message)| {
+                    view.child(subtle(message.clone()))
+                });
         };
-        let [accent, _, success] = logo_colors(document.game);
-        let mut action = None;
-        let has_progress = document
-            .progress
-            .get(self.snapshot)
-            .is_some_and(Option::is_some);
-        if self.tab == Tab::Progress && !has_progress {
-            self.tab = Tab::City;
-        }
         let pending = document.changed();
-        document_banner(ui, document, locale);
-        if matches!(
+        let game = document.game;
+        let archive_help = matches!(
             archive_key(&document.path),
             "auto_archive" | "manual_archive"
-        ) && !document.pc2_survival()
-        {
-            ui.label(
-                RichText::new(locale.text("archive_edit_help"))
-                    .color(MUTED)
-                    .size(13.0),
-            );
-        }
-        ui.add_space(6.0);
-        ui.horizontal_wrapped(|ui| {
-            let save_button = egui::Button::new(
-                RichText::new(locale.text("save"))
-                    .strong()
-                    .color(if pending > 0 { BG } else { MUTED }),
+        ) && !document.pc2_survival();
+        let has_progress = document.progress[self.snapshot].is_some();
+        let heading = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .min_w_0()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().size_2().rounded_full().bg(rgb(accent(game))))
+                    .child(subtle(format!(
+                        "{} · {}",
+                        game.title(),
+                        locale.text(archive_key(&document.path))
+                    ))),
             )
-            .fill(if pending > 0 { accent } else { SURFACE });
-            if ui.add_enabled(pending > 0, save_button).clicked() {
-                action = Some("save");
-            }
-            if ui.button(locale.text("export")).clicked() {
-                action = Some("export");
-            }
-            if pending > 0 {
-                if ui.button(locale.text("discard")).clicked() {
-                    action = Some("reload");
-                }
-                let text = locale.text("pending").replace("{n}", &pending.to_string());
-                ui.label(RichText::new(text).color(WARM));
-            } else if ui.button(locale.text("reload")).clicked() {
-                action = Some("reload");
-            }
-        });
-        ui.add_space(4.0);
-        Frame::new()
-            .fill(SIDEBAR)
-            .corner_radius(10)
-            .inner_margin(Margin::same(5))
-            .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    for (tab, label) in [
-                        (Tab::City, locale.text("overview")),
-                        (Tab::Collections, locale.text("collections")),
-                        (Tab::Progress, locale.text("progression_tab")),
-                        (Tab::Advanced, locale.text("advanced")),
-                        (Tab::Backups, locale.text("backups")),
-                    ] {
-                        if tab == Tab::Progress && !has_progress {
-                            continue;
+            .child(
+                div().text_2xl().font_semibold().child(Label::new(
+                    settings_title(&document.path, locale)
+                        .unwrap_or(&document.title)
+                        .to_owned(),
+                )),
+            );
+        let toolbar = Toolbar::new("document-actions")
+            .child(
+                action(
+                    cx,
+                    "reload",
+                    locale.text(if pending > 0 { "discard" } else { "reload" }),
+                    false,
+                    true,
+                    |this, _, _| {
+                        if let Some(doc) = &this.current {
+                            this.settle(Save::open(&doc.path), "reloaded");
                         }
-                        if ui.selectable_label(self.tab == tab, label).clicked() {
-                            self.tab = tab;
-                            self.query.clear();
+                    },
+                )
+                .ghost(),
+            )
+            .child(action(
+                cx,
+                "export",
+                locale.text("export"),
+                false,
+                true,
+                |this, _, _| {
+                    if let Some(doc) = &this.current
+                        && let Some(path) = rfd::FileDialog::new()
+                            .set_file_name(save::file_label(&doc.path))
+                            .save_file()
+                    {
+                        match doc.export(&path) {
+                            Ok(()) => {
+                                this.notice = Some((false, this.locale.text("exported").to_owned()))
+                            }
+                            Err(error) => this.failure(error),
                         }
                     }
-                });
-            });
-        if let Some((failed, message)) = &self.notice {
-            let color = if *failed { ERROR } else { success };
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(message).color(color));
-            });
-        }
-        ui.add_space(8.0);
-        if document.snapshots.len() > 1 {
-            ui.horizontal(|ui| {
-                ui.label(locale.text("version"));
-                let label = |index: usize| {
-                    let raw = &document.snapshots[index];
-                    let (kind, number) = raw.split_once(' ').unwrap_or((raw, ""));
-                    let kind = locale.text(if kind == "Manual" {
+                },
+            ))
+            .child(action(
+                cx,
+                "save",
+                locale.text("save"),
+                true,
+                pending != 0,
+                |this, _, _| {
+                    if let Some(document) = &this.current {
+                        this.settle(document.save(), "saved");
+                    }
+                },
+            ));
+        let header = div()
+            .flex()
+            .flex_wrap()
+            .items_end()
+            .justify_between()
+            .gap_3()
+            .child(heading)
+            .child(toolbar);
+        let choices = [
+            (Tab::City, "overview"),
+            (Tab::Collections, "collections"),
+            (Tab::Progress, "progression_tab"),
+            (Tab::Advanced, "advanced"),
+            (Tab::Backups, "backups"),
+        ]
+        .into_iter()
+        .filter(|(tab, _)| *tab != Tab::Progress || has_progress)
+        .collect::<Vec<_>>();
+        let tabs = TabBar::new("document-tabs")
+            .underline()
+            .selected_index(
+                choices
+                    .iter()
+                    .position(|(tab, _)| *tab == self.tab)
+                    .unwrap_or_default(),
+            )
+            .children(
+                choices
+                    .iter()
+                    .map(|&(_, label)| KitTab::new().label(locale.text(label))),
+            )
+            .on_click(cx.listener(move |this, index: &usize, window, cx| {
+                if let Some(&(tab, _)) = choices.get(*index) {
+                    this.tab = tab;
+                    this.page = 0;
+                    this.query
+                        .update(cx, |state, cx| state.set_value("", window, cx));
+                    cx.notify();
+                }
+            }));
+
+        let snapshots = if document.snapshots.len() > 1 {
+            let label = |index: usize| {
+                let (kind, number) = document.snapshots[index]
+                    .split_once(' ')
+                    .unwrap_or(("", ""));
+                format!(
+                    "{} {}{}",
+                    locale.text(if kind == "Manual" {
                         "manual"
                     } else {
                         "automatic"
-                    });
+                    }),
+                    number,
                     if index == document.latest {
-                        format!("{kind} {number} · {}", locale.text("latest"))
+                        format!(" · {}", locale.text("latest"))
                     } else {
-                        format!("{kind} {number}")
+                        String::new()
                     }
-                };
-                egui::ComboBox::from_id_salt("snapshot")
-                    .selected_text(label(self.snapshot))
-                    .show_ui(ui, |ui| {
-                        for index in 0..document.snapshots.len() {
-                            ui.selectable_value(&mut self.snapshot, index, label(index));
-                        }
-                    });
-            });
-        }
-        if self.tab == Tab::Backups {
-            match document.backups() {
-                Ok(paths) if paths.is_empty() => {
-                    ui.label(RichText::new(locale.text("backup_help")).color(MUTED));
-                }
-                Ok(paths) => {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        for path in paths {
-                            ui.horizontal(|ui| {
-                                if path.extension().is_some_and(|ext| ext == "bk") {
-                                    ui.label(locale.text("game_backup"))
-                                        .on_hover_text(save::file_label(&path));
-                                } else {
-                                    ui.label(save::file_label(&path));
-                                }
-                                if ui
-                                    .add_enabled(
-                                        pending == 0,
-                                        egui::Button::new(locale.text("restore_open")),
-                                    )
-                                    .clicked()
-                                {
-                                    self.restore = Some(path);
-                                }
-                            });
-                        }
-                    });
-                }
-                Err(error) => {
-                    ui.label(format!("{}\n{error:#}", locale.text("failed")));
-                }
-            }
-        } else if self.tab == Tab::Progress {
-            if let Some(progress) = document
-                .progress
-                .get_mut(self.snapshot)
-                .and_then(Option::as_mut)
-            {
-                edit_progression(
-                    ui,
-                    progress,
-                    &mut self.progress_section,
-                    &mut self.query,
-                    self.snapshot,
-                    locale,
-                );
-            }
-        } else {
-            let query = self.query.trim().to_lowercase();
-            if self.tab == Tab::Collections {
-                let available = Collection::ALL
-                    .into_iter()
-                    .filter(|option| {
-                        document
-                            .fields
-                            .iter()
-                            .any(|field| option.matches(&field.path))
-                    })
-                    .collect::<Vec<_>>();
-                if !available.contains(&self.collection)
-                    && let Some(first) = available.first()
-                {
-                    self.collection = *first;
-                }
-                if !available.is_empty() {
-                    ui.horizontal_wrapped(|ui| {
-                        egui::ComboBox::from_id_salt("collection")
-                            .selected_text(locale.text(self.collection.label_key()))
-                            .show_ui(ui, |ui| {
-                                for option in available {
-                                    if ui
-                                        .selectable_value(
-                                            &mut self.collection,
-                                            option,
-                                            locale.text(option.label_key()),
-                                        )
-                                        .changed()
-                                    {
-                                        self.query.clear();
-                                    }
-                                }
-                            });
-                        let bulk = match self.collection {
-                            Collection::Affinity => {
-                                Some((locale.text("max_affinity"), MAX_AFFINITY.to_string()))
-                            }
-                            Collection::Buildings => {
-                                Some((locale.text("unlock_buildings"), "true".to_owned()))
-                            }
-                            Collection::Vehicles => {
-                                Some((locale.text("unlock_cars"), "true".to_owned()))
-                            }
-                            _ => None,
-                        };
-                        if let Some((label, value)) = bulk
-                            && ui.button(label).clicked()
-                        {
-                            apply_collection(document, self.collection, &value);
-                        }
-                    });
-                    if self.collection == Collection::Affinity {
-                        ui.label(RichText::new(locale.text("affinity_help")).color(MUTED));
-                    } else if self.collection == Collection::Buildings {
-                        ui.label(RichText::new(locale.text("building_help")).color(MUTED));
-                    } else if self.collection.is_resource_automation() {
-                        ui.label(RichText::new(locale.text("auto_help")).color(MUTED));
-                    } else if self.collection == Collection::GlobalFlags {
-                        ui.label(RichText::new(locale.text("game_records_help")).color(MUTED));
-                    }
-                }
-            }
-            if self.tab != Tab::City {
-                ui.add(
-                    TextEdit::singleline(&mut self.query)
-                        .hint_text(locale.text("search"))
-                        .desired_width(275.0),
-                );
-            }
-            let tab = self.tab;
-            let game = document.game;
-            let survival = document.is_pc2_city() && document.pc2_survival();
-            egui::ScrollArea::vertical()
-                .id_salt(("fields", tab as u8))
-                .show(ui, |ui| {
-                    if tab == Tab::City {
-                        if document.is_pc2_city() {
-                            city_mode_panel(ui, document, locale);
-                        }
-                        progression_panel(ui, document, self.snapshot, locale);
-                    }
-                    let mut shown = 0;
-                    Frame::new()
-                        .fill(SURFACE)
-                        .stroke(Stroke::new(1.0_f32, BORDER))
-                        .corner_radius(10)
-                        .inner_margin(Margin::same(14))
-                        .show(ui, |ui| {
-                            ui.set_min_width(ui.available_width());
-                            let label_width = (ui.available_width() * 0.53).clamp(180.0, 410.0);
-                            let field_width =
-                                (ui.available_width() - label_width - 30.0).clamp(98.0, 300.0);
-                            ui.label(
-                                RichText::new(if tab == Tab::City {
-                                    locale.text("city_data")
-                                } else {
-                                    locale.text("fields")
-                                })
-                                .strong()
-                                .size(16.0),
-                            );
-                            ui.add_space(3.0);
-                            egui::Grid::new(("document-fields", tab as u8))
-                                .num_columns(2)
-                                .spacing([18.0, 5.0])
-                                .striped(true)
-                                .show(ui, |ui| {
-                                    for field in &mut document.fields {
-                                        if field.snapshot != self.snapshot {
-                                            continue;
-                                        }
-                                        let section = field_section(&field.path);
-                                        let is_visible = match tab {
-                                            Tab::City => section == Tab::City,
-                                            Tab::Collections => {
-                                                self.collection.matches(&field.path)
-                                            }
-                                            Tab::Advanced => true,
-                                            Tab::Backups | Tab::Progress => false,
-                                        };
-                                        let label = field_name(&field.path, &field.label, locale);
-                                        if !is_visible
-                                            || (!query.is_empty()
-                                                && !field.path.to_lowercase().contains(&query)
-                                                && !label.to_lowercase().contains(&query))
-                                        {
-                                            continue;
-                                        }
-                                        shown += 1;
-                                        let label_color =
-                                            if field.changed() { accent } else { INK };
-                                        let locked = field.locked(game)
-                                            || (survival
-                                                && save::PC2_SANDBOX_FLAGS
-                                                    .contains(&field.path.as_str())
-                                                && field.value == "false");
-                                        let is_record = field.is_game_record(game);
-                                        let record_help = if is_record {
-                                            let id =
-                                                field.path.split_once('.').map_or("", |(_, id)| id);
-                                            locale.get(&format!("record_{id}_help"))
-                                        } else {
-                                            None
-                                        };
-                                        let description = record_help.or_else(|| {
-                                            let key = match field.path.as_str() {
-                                                "money" | "stats.money" => "money_help",
-                                                "level" | "stats.level" => "level_help",
-                                                "unlockAll" if game == Game::Two => {
-                                                    "unlock_all_help"
-                                                }
-                                                _ => return None,
-                                            };
-                                            locale.get(key)
-                                        });
-                                        let label = if locked
-                                            && !is_record
-                                            && !Collection::Buildings.matches(&field.path)
-                                        {
-                                            format!("{label} · {}", locale.text("protected"))
-                                        } else {
-                                            label
-                                        };
-                                        let row = egui::Label::new(
-                                            RichText::new(&label).color(label_color),
-                                        )
-                                        .truncate();
-                                        let label_response = if let Some(description) = description
-                                        {
-                                            ui.allocate_ui_with_layout(
-                                                egui::vec2(label_width, 0.0),
-                                                Layout::top_down(Align::Min),
-                                                |ui| {
-                                                    ui.set_max_width(label_width);
-                                                    let title =
-                                                        ui.add(row).on_hover_text(&field.path);
-                                                    ui.label(
-                                                        RichText::new(description)
-                                                            .color(MUTED)
-                                                            .size(13.0),
-                                                    );
-                                                    title
-                                                },
-                                            )
-                                            .inner
-                                        } else {
-                                            ui.allocate_ui_with_layout(
-                                                egui::vec2(label_width, 30.0),
-                                                Layout::left_to_right(Align::Center),
-                                                |ui| {
-                                                    ui.add(row).on_hover_text(format!(
-                                                        "{label}\n{}",
-                                                        field.path
-                                                    ))
-                                                },
-                                            )
-                                            .inner
-                                        };
-                                        ui.push_id((shown, &field.path), |ui| {
-                                            if is_record {
-                                                let status = if record_help.is_some() {
-                                                    "tip_seen"
-                                                } else {
-                                                    "recorded"
-                                                };
-                                                ui.label(
-                                                    RichText::new(locale.text(status)).color(MUTED),
-                                                )
-                                                .labelled_by(label_response.id);
-                                                return;
-                                            }
-                                            ui.add_enabled_ui(!locked, |ui| {
-                                                if field.kind == Kind::Boolean {
-                                                    let mut checked = field.value == "true";
-                                                    if ui
-                                                        .checkbox(&mut checked, "")
-                                                        .labelled_by(label_response.id)
-                                                        .changed()
-                                                    {
-                                                        field.value = checked.to_string();
-                                                    }
-                                                } else if game == Game::Two
-                                                    && let Some(options) =
-                                                        field_options(&field.path, locale)
-                                                {
-                                                    let selected = options
-                                                        .iter()
-                                                        .find(|(value, _)| *value == field.value)
-                                                        .map_or(
-                                                            field.value.as_str(),
-                                                            |(_, title)| *title,
-                                                        );
-                                                    egui::ComboBox::from_id_salt("field-options")
-                                                        .selected_text(selected)
-                                                        .show_ui(ui, |ui| {
-                                                            for (value, name) in options {
-                                                                ui.selectable_value(
-                                                                    &mut field.value,
-                                                                    value.to_owned(),
-                                                                    name,
-                                                                );
-                                                            }
-                                                        })
-                                                        .response
-                                                        .labelled_by(label_response.id);
-                                                } else {
-                                                    ui.add_sized(
-                                                        [field_width, 27.0],
-                                                        TextEdit::singleline(&mut field.value),
-                                                    )
-                                                    .labelled_by(label_response.id);
-                                                }
-                                            });
-                                        });
-                                        ui.end_row();
-                                    }
-                                });
-                            if shown == 0 {
-                                ui.label(RichText::new(locale.text("empty_fields")).color(MUTED));
-                            }
-                        });
-                });
-        }
-
-        let result = match action {
-            Some("save") => Some(
-                document
-                    .save()
-                    .map(|updated| (Some(updated), locale.text("saved"))),
-            ),
-            Some("reload") => Some(
-                Save::open(&document.path).map(|updated| (Some(updated), locale.text("reloaded"))),
-            ),
-            Some("export") => rfd::FileDialog::new()
-                .set_file_name(save::file_label(&document.path))
-                .save_file()
-                .map(|path| {
-                    document
-                        .export(&path)
-                        .map(|()| (None, locale.text("exported")))
-                }),
-            _ => None,
-        };
-        match result {
-            Some(Ok((updated, message))) => {
-                if let Some(updated) = updated {
-                    self.snapshot = self.snapshot.min(updated.snapshots.len() - 1);
-                    self.remember(&updated);
-                    self.current = Some(updated);
-                }
-                self.status(false, message);
-            }
-            Some(Err(error)) => {
-                self.status(true, format!("{}\n{error:#}", self.locale.text("failed")))
-            }
-            None => {}
-        }
-    }
-}
-
-impl eframe::App for Editor {
-    fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        storage.set_string("locale", self.locale.code().to_owned());
-    }
-
-    fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-        let locale = self.locale;
-        let [accent, _, _] = logo_colors(self.game);
-        if ctx.style().visuals.selection.stroke.color != accent {
-            let mut style = (*ctx.style()).clone();
-            style.visuals.selection.bg_fill = match self.game {
-                Game::One => Color32::from_rgb(50, 62, 108),
-                Game::Two => Color32::from_rgb(42, 70, 105),
+                )
             };
-            style.visuals.selection.stroke.color = accent;
-            style.visuals.widgets.active.bg_stroke.color = accent;
-            ctx.set_style(style);
+            let editor = cx.weak_entity();
+            let selected = self.snapshot;
+            let options = (0..document.snapshots.len()).map(label).collect::<Vec<_>>();
+            Some(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .child(subtle(locale.text("version")))
+                    .child(
+                        Button::new("snapshot")
+                            .label(options[selected].clone())
+                            .icon(IconName::ChevronDown)
+                            .outline()
+                            .small()
+                            .dropdown_menu(move |menu, _, _| {
+                                options
+                                    .iter()
+                                    .enumerate()
+                                    .fold(menu, |menu, (index, label)| {
+                                        let editor = editor.clone();
+                                        menu.item(
+                                            PopupMenuItem::new(label.clone())
+                                                .checked(index == selected)
+                                                .on_click(move |_, _, cx| {
+                                                    let _ = editor.update(cx, |this, cx| {
+                                                        this.snapshot = index;
+                                                        this.reset_controls();
+                                                        cx.notify();
+                                                    });
+                                                }),
+                                        )
+                                    })
+                            }),
+                    ),
+            )
+        } else {
+            None
+        };
+        let body = match self.tab {
+            Tab::Backups => self.backup_view(cx),
+            Tab::Progress => self.progression(window, cx),
+            _ => self.fields(window, cx),
+        };
+        div()
+            .flex()
+            .flex_col()
+            .min_w_0()
+            .gap_3()
+            .flex_1()
+            .h_full()
+            .p_5()
+            .child(header)
+            .when(archive_help, |root| {
+                root.child(subtle(locale.text("archive_edit_help")))
+            })
+            .child(tabs)
+            .when(pending > 0, |root| {
+                root.child(subtle(
+                    locale.text("pending").replace("{n}", &pending.to_string()),
+                ))
+            })
+            .when_some(snapshots, |root, row| root.child(row))
+            .when_some(self.notice.as_ref(), |root, (error, message)| {
+                root.child(if *error {
+                    Alert::error("save-notice", message.clone())
+                } else {
+                    Alert::success("save-notice", message.clone())
+                })
+            })
+            .child(
+                div()
+                    .id(("document-scroll", self.tab as usize))
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .child(body),
+            )
+    }
+
+    fn backup_view(&self, cx: &mut Context<Self>) -> Div {
+        let locale = self.locale;
+        let document = self.current.as_ref().unwrap();
+        let mut view = column();
+        match document.backups() {
+            Ok(paths) => {
+                if paths.is_empty() {
+                    view = view.child(subtle(locale.text("backup_help")));
+                }
+                for (index, path) in paths.into_iter().enumerate() {
+                    let name = if path.extension().is_some_and(|ext| ext == "bk") {
+                        locale.text("game_backup").to_owned()
+                    } else {
+                        save::file_label(&path)
+                    };
+                    view = view.child(row(&name, "").child(action(
+                        cx,
+                        ("restore", index),
+                        locale.text("restore_open"),
+                        false,
+                        document.changed() == 0,
+                        move |this, _, _| this.restore = Some(path.clone()),
+                    )));
+                }
+            }
+            Err(error) => view = view.child(subtle(error.to_string())),
         }
-        if ctx.input(|i| i.viewport().close_requested())
-            && self
-                .current
-                .as_ref()
-                .is_some_and(|save| save.changed() != 0)
-        {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.status(true, locale.text("pending_guard"));
+        if let Some(path) = &self.restore {
+            let path = path.clone();
+            view = view.child(
+                row(locale.text("restore_backup"), locale.text("restore_help")).child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(action(
+                            cx,
+                            "restore-confirm",
+                            locale.text("restore"),
+                            true,
+                            true,
+                            move |this, _, _| {
+                                if let Some(document) = &this.current {
+                                    this.settle(document.restore(&path), "restored");
+                                }
+                            },
+                        ))
+                        .child(action(
+                            cx,
+                            "restore-cancel",
+                            locale.text("cancel"),
+                            false,
+                            true,
+                            |this, _, _| this.restore = None,
+                        )),
+                ),
+            );
         }
-        for path in ctx.input(|i| {
-            i.raw
-                .dropped_files
-                .iter()
-                .filter_map(|file| file.path.clone())
-                .take(1)
-                .collect::<Vec<_>>()
-        }) {
-            self.open(&path);
+        view
+    }
+
+    fn fields(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let locale = self.locale;
+        let document = self.current.as_ref().unwrap();
+        let query = self.query.read(cx).value().trim().to_lowercase();
+        let mut view = column();
+        if self.tab == Tab::City {
+            view = view.child(self.city_summary(cx));
         }
-        self.sidebar(ctx);
-        egui::CentralPanel::default()
-            .frame(Frame::new().fill(BG).inner_margin(Margin::same(26)))
-            .show(ctx, |ui| self.document(ui));
-        if let Some(backup) = self.restore.clone() {
-            egui::Window::new(locale.text("restore_backup"))
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    ui.label(locale.text("restore_help"));
-                    ui.horizontal(|ui| {
-                        if ui.button(locale.text("cancel")).clicked() {
-                            self.restore = None;
-                        }
-                        if ui.button(locale.text("restore")).clicked() {
-                            if let Some(document) = &self.current {
-                                match document.restore(&backup) {
-                                    Ok(updated) => {
-                                        self.snapshot = updated.latest;
-                                        self.remember(&updated);
-                                        self.current = Some(updated);
-                                        self.status(false, locale.text("restored"));
-                                    }
-                                    Err(error) => self.status(
-                                        true,
-                                        format!("{}\n{error:#}", self.locale.text("failed")),
-                                    ),
+        if self.tab == Tab::Collections {
+            let available = Collection::ALL
+                .into_iter()
+                .filter(|choice| {
+                    document
+                        .fields
+                        .iter()
+                        .any(|field| field.snapshot == self.snapshot && choice.matches(&field.path))
+                })
+                .collect::<Vec<_>>();
+            if !available.contains(&self.collection)
+                && let Some(&first) = available.first()
+            {
+                self.collection = first;
+            }
+            let editor = cx.weak_entity();
+            let selected = self.collection;
+            let mut controls = div()
+                .flex()
+                .items_center()
+                .flex_wrap()
+                .gap_2()
+                .child(
+                    Button::new("collections")
+                        .label(locale.text(selected.label_key()))
+                        .icon(IconName::ChevronDown)
+                        .outline()
+                        .small()
+                        .disabled(available.is_empty())
+                        .dropdown_menu(move |menu, _, _| {
+                            available.iter().copied().fold(menu, |menu, collection| {
+                                let editor = editor.clone();
+                                menu.item(
+                                    PopupMenuItem::new(locale.text(collection.label_key()))
+                                        .checked(selected == collection)
+                                        .on_click(move |_, _, cx| {
+                                            let _ = editor.update(cx, |this, cx| {
+                                                this.collection = collection;
+                                                this.page = 0;
+                                                cx.notify();
+                                            });
+                                        }),
+                                )
+                            })
+                        }),
+                )
+                .child(Input::new(&self.query).w(px(240.0)));
+            let bulk = match self.collection {
+                Collection::Affinity => {
+                    Some(("max_affinity", MAX_AFFINITY.to_string(), "affinity_help"))
+                }
+                Collection::Buildings => {
+                    Some(("unlock_buildings", "true".to_owned(), "building_help"))
+                }
+                Collection::Vehicles => Some(("unlock_cars", "true".to_owned(), "")),
+                _ => None,
+            };
+            let helper = if let Some((label, value, helper)) = bulk {
+                let collection = self.collection;
+                controls = controls.child(action(
+                    cx,
+                    "collection-bulk",
+                    locale.text(label),
+                    false,
+                    true,
+                    move |this, _, _| {
+                        if let Some(doc) = &mut this.current {
+                            for field in &mut doc.fields {
+                                if field.snapshot == this.snapshot
+                                    && collection.matches(&field.path)
+                                    && !field.locked(doc.game)
+                                {
+                                    field.value.clone_from(&value);
                                 }
                             }
-                            self.restore = None;
+                        }
+                        this.inputs.clear();
+                    },
+                ));
+                helper
+            } else if self.collection.is_resource_automation() {
+                "auto_help"
+            } else if self.collection == Collection::GlobalFlags {
+                "game_records_help"
+            } else {
+                ""
+            };
+            view = view.child(controls).when(!helper.is_empty(), |view| {
+                view.child(subtle(locale.text(helper)))
+            });
+        } else if self.tab == Tab::Advanced {
+            view = view.child(Input::new(&self.query).w(px(300.0)));
+        }
+        let mut entries = Vec::new();
+        for (index, field) in document.fields.iter().enumerate() {
+            let visible = match self.tab {
+                Tab::City => field_section(&field.path) == Tab::City,
+                Tab::Collections => self.collection.matches(&field.path),
+                _ => true,
+            };
+            if field.snapshot != self.snapshot || !visible {
+                continue;
+            }
+            let name = field_name(&field.path, &field.label, locale);
+            if !query.is_empty()
+                && !name.to_lowercase().contains(&query)
+                && !field.path.to_lowercase().contains(&query)
+            {
+                continue;
+            }
+            entries.push((index, name));
+        }
+        if entries.is_empty() {
+            return view.child(subtle(locale.text("empty_fields")));
+        }
+        let page_count = entries.len().div_ceil(PAGE_SIZE);
+        self.page = self.page.min(page_count - 1);
+        if page_count > 1 {
+            let page = self.page;
+            view = view.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(action(
+                        cx,
+                        "previous",
+                        "‹",
+                        false,
+                        page > 0,
+                        |this, _, _| this.page -= 1,
+                    ))
+                    .child(subtle(format!("{} / {page_count}", page + 1)))
+                    .child(action(
+                        cx,
+                        "next",
+                        "›",
+                        false,
+                        page + 1 < page_count,
+                        |this, _, _| this.page += 1,
+                    )),
+            );
+        }
+        let page_entries = entries
+            .into_iter()
+            .skip(self.page * PAGE_SIZE)
+            .take(PAGE_SIZE)
+            .collect::<Vec<_>>();
+        self.inputs
+            .retain(|index, _| page_entries.iter().any(|(id, _)| id == index));
+        let form = h_form().label_width(px(180.0)).children(
+            page_entries
+                .into_iter()
+                .map(|(index, name)| self.field_row(index, name, window, cx)),
+        );
+        view.child(
+            GroupBox::new()
+                .id("save-fields")
+                .outline()
+                .when(self.tab == Tab::City, |group| {
+                    group.title(Label::new(locale.text("city_data")))
+                })
+                .child(form),
+        )
+    }
+
+    fn city_summary(&self, cx: &mut Context<Self>) -> Div {
+        let locale = self.locale;
+        let doc = self.current.as_ref().unwrap();
+        let (level_key, xp_key) = doc.game.progression();
+        let level = doc
+            .fields
+            .iter()
+            .find(|field| field.snapshot == self.snapshot && field.path == level_key)
+            .and_then(|field| field.value.parse::<i64>().ok());
+        let xp = doc
+            .fields
+            .iter()
+            .find(|field| field.snapshot == self.snapshot && field.path == xp_key)
+            .and_then(|field| field.value.parse::<i64>().ok());
+        let mut panel = column();
+        if doc.is_pc2_city() {
+            panel = panel.child(row(
+                locale.text(if doc.pc2_survival() {
+                    "survival_city"
+                } else if doc.pc2_sandbox() {
+                    "sandbox"
+                } else {
+                    "regular_city"
+                }),
+                "",
+            ));
+        }
+        if let (Some(level), Some(xp)) = (level, xp)
+            && let Some(total) = doc.game.next_level_xp(level)
+        {
+            panel = panel.child(
+                row(
+                    &format!("{} {level}", locale.text("level")),
+                    &locale
+                        .text("xp_progress")
+                        .replace("{xp}", &xp.to_string())
+                        .replace("{total}", &total.to_string()),
+                )
+                .child(
+                    ProgressBar::new("xp-progress")
+                        .value(xp as f32 / total as f32 * 100.0)
+                        .color(rgb(accent(doc.game)))
+                        .accessibility_label(locale.text("level")),
+                )
+                .child(div().flex().child(action(
+                    cx,
+                    "reset-xp",
+                    locale.text("reset_xp"),
+                    false,
+                    xp != 0,
+                    move |this, _, _| {
+                        if let Some(doc) = &mut this.current
+                            && let Some((i, field)) =
+                                doc.fields.iter_mut().enumerate().find(|(_, field)| {
+                                    field.snapshot == this.snapshot && field.path == xp_key
+                                })
+                        {
+                            field.value = "0".to_owned();
+                            this.inputs.remove(&i);
+                        }
+                    },
+                ))),
+            );
+        }
+        panel
+    }
+
+    fn field_row(
+        &mut self,
+        index: usize,
+        name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> form::Field {
+        let locale = self.locale;
+        let document = self.current.as_ref().unwrap();
+        let field = &document.fields[index];
+        let locked = field.locked(document.game)
+            || (document.pc2_survival()
+                && save::PC2_SANDBOX_FLAGS.contains(&field.path.as_str())
+                && field.value == "false");
+        let path = field.path.clone();
+        let value = field.value.clone();
+        let kind = field.kind;
+        let help = match path.as_str() {
+            "money" | "stats.money" => locale.text("money_help"),
+            "level" | "stats.level" => locale.text("level_help"),
+            "unlockAll" => locale.text("unlock_all_help"),
+            _ if field.is_game_record(document.game) => {
+                let id = path.split_once('.').map_or("", |(_, id)| id);
+                locale
+                    .get(&format!("record_{id}_help"))
+                    .unwrap_or_else(|| locale.text("game_records_help"))
+            }
+            _ => "",
+        };
+        let item = form::field()
+            .label(name.clone())
+            .items_center()
+            .when(!help.is_empty(), |field| field.description(help));
+        if kind == Kind::Boolean {
+            return item.child(
+                Checkbox::new(("checkbox", index))
+                    .accessibility_label(name)
+                    .checked(value == "true")
+                    .disabled(locked)
+                    .on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                        if let Some(doc) = &mut this.current {
+                            doc.fields[index].value = checked.to_string();
+                        }
+                        cx.notify();
+                    })),
+            );
+        }
+        if let Some(options) = field_options(&path, locale) {
+            let selected = options
+                .iter()
+                .find(|entry| entry.0 == value)
+                .map_or(value.as_str(), |entry| entry.1);
+            let selected = selected.to_owned();
+            let editor = cx.weak_entity();
+            return item.child(
+                div().flex().child(
+                    Button::new(("field-picker", index))
+                        .label(selected)
+                        .icon(IconName::ChevronDown)
+                        .outline()
+                        .small()
+                        .disabled(locked)
+                        .dropdown_menu(move |menu, _, _| {
+                            options.iter().fold(menu, |menu, &(key, label)| {
+                                let editor = editor.clone();
+                                menu.item(PopupMenuItem::new(label).checked(key == value).on_click(
+                                    move |_, _, cx| {
+                                        let _ = editor.update(cx, |this, cx| {
+                                            if let Some(doc) = &mut this.current {
+                                                doc.fields[index].value = key.to_owned();
+                                            }
+                                            cx.notify();
+                                        });
+                                    },
+                                ))
+                            })
+                        }),
+                ),
+            );
+        }
+        if locked {
+            return item.child(subtle(value));
+        }
+        let input = &self
+            .inputs
+            .entry(index)
+            .or_insert_with(|| {
+                let state = cx.new(|cx| InputState::new(window, cx).default_value(value));
+                let subscription =
+                    cx.subscribe(&state, move |this, state, event: &InputEvent, cx| {
+                        if matches!(event, InputEvent::Change)
+                            && let Some(doc) = &mut this.current
+                        {
+                            doc.fields[index].value = state.read(cx).value().to_string();
+                            cx.notify();
                         }
                     });
-                });
-        }
+                (state, subscription)
+            })
+            .0;
+        item.child(Input::new(input).w_full().max_w(px(280.0)))
     }
 }
 
-fn library_row(ui: &mut egui::Ui, entry: &Entry, selected: bool, locale: Locale) -> egui::Response {
-    let title = settings_title(&entry.path, locale).unwrap_or(&entry.title);
-    let [accent, _, _] = logo_colors(entry.game);
-    let subtitle = locale.text(archive_key(&entry.path));
-    let (_, rect) = ui.allocate_space(egui::vec2(ui.available_width(), 49.0));
-    let response = ui.interact(
-        rect,
-        ui.make_persistent_id(&entry.path),
-        egui::Sense::click(),
-    );
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(
-            egui::WidgetType::SelectableLabel,
-            ui.is_enabled(),
-            selected,
-            format!("{title}, {subtitle}"),
-        )
-    });
-
-    if ui.is_rect_visible(rect) {
-        let painter = ui.painter();
-        let fill = if selected {
-            HEADER
-        } else if response.hovered() {
-            SURFACE
-        } else {
-            Color32::TRANSPARENT
-        };
-        let stroke = if response.has_focus() {
-            Stroke::new(1.0_f32, accent)
-        } else if selected {
-            Stroke::new(1.0_f32, BORDER)
-        } else {
-            Stroke::NONE
-        };
-        painter.rect(rect, 8.0, fill, stroke, egui::StrokeKind::Inside);
-        for (text, font_size, color, top) in [
-            (title, 15.0, if selected { accent } else { INK }, 6.0),
-            (subtitle, 12.0, MUTED, 27.0),
-        ] {
-            let mut job = egui::text::LayoutJob::simple_singleline(
-                text.to_owned(),
-                egui::FontId::proportional(font_size),
-                color,
-            );
-            job.wrap.max_width = (rect.width() - 24.0).max(0.0);
-            job.wrap.max_rows = 1;
-            painter.galley(
-                rect.left_top() + egui::vec2(12.0, top),
-                painter.layout_job(job),
-                color,
-            );
-        }
+impl Render for Editor {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("save-editor")
+            .size_full()
+            .flex()
+            .bg(cx.theme().background)
+            .text_color(cx.theme().foreground)
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                if let Some(path) = paths.paths().first() {
+                    this.open(path);
+                    if this.notice.is_none() {
+                        this.query
+                            .update(cx, |state, cx| state.set_value("", window, cx));
+                    }
+                    cx.notify();
+                }
+            }))
+            .child(self.sidebar(cx))
+            .child(self.document(window, cx))
     }
+}
 
-    response.on_hover_text(format!("{title}\n{}", entry.path.display()))
+fn action(
+    cx: &Context<Editor>,
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    selected: bool,
+    enabled: bool,
+    handler: impl Fn(&mut Editor, &mut Window, &mut Context<Editor>) + 'static,
+) -> Button {
+    let button = Button::new(id).label(label).small().disabled(!enabled);
+    let button = if selected {
+        button.primary()
+    } else {
+        button.outline()
+    };
+    button.on_click(cx.listener(move |this, _, window, cx| {
+        handler(this, window, cx);
+        cx.notify();
+    }))
+}
+
+fn column() -> Div {
+    div().flex().flex_col().gap_2().pb_3()
+}
+#[track_caller]
+fn subtle(text: impl Into<SharedString>) -> Label {
+    let text = text.into();
+    let caller = std::panic::Location::caller();
+    Label::new(text.clone())
+        .id(SharedString::from(format!(
+            "{}:{}:{}:{text}",
+            caller.file(),
+            caller.line(),
+            caller.column()
+        )))
+        .text_sm()
+        .text_color(rgb(MUTED))
+}
+fn row(title: &str, help: &str) -> Stateful<Div> {
+    div()
+        .id(SharedString::from(format!("row-{title}")))
+        .border_b_1()
+        .border_color(rgb(BORDER))
+        .py_3()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(div().font_semibold().child(Label::new(title.to_owned())))
+        .when(!help.is_empty(), |row| row.child(subtle(help.to_owned())))
 }
 
 fn archive_key(path: &Path) -> &'static str {
@@ -984,591 +1179,6 @@ fn settings_title(path: &Path, locale: Locale) -> Option<&'static str> {
         "_user.save" => "player_settings",
         _ => return None,
     })
-}
-
-fn document_banner(ui: &mut egui::Ui, document: &Save, locale: Locale) {
-    let wide = ui.available_width() >= 560.0;
-    let colors = logo_colors(document.game);
-    let settings = settings_title(&document.path, locale);
-    let title = settings.unwrap_or(&document.title);
-    let header = Frame::new()
-        .fill(HEADER)
-        .corner_radius(14)
-        .inner_margin(Margin::symmetric(19, 14))
-        .show(ui, |ui| {
-            let width = ui.available_width();
-            ui.set_min_width(width);
-            ui.allocate_ui_with_layout(
-                egui::vec2(width - if wide { 172.0 } else { 0.0 }, 0.0),
-                Layout::top_down(Align::Min),
-                |ui| {
-                    ui.label(
-                        RichText::new(format!(
-                            "{}  /  {}",
-                            document.game.title(),
-                            locale.text(archive_key(&document.path))
-                        ))
-                        .color(colors[0])
-                        .size(13.0),
-                    );
-                    ui.add(egui::Label::new(RichText::new(title).size(31.0).strong()).truncate())
-                        .on_hover_text(document.path.display().to_string());
-                    if settings.is_none() {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(save::file_label(&document.path))
-                                    .color(MUTED)
-                                    .size(12.0),
-                            )
-                            .truncate(),
-                        )
-                        .on_hover_text(document.path.display().to_string());
-                    }
-                },
-            );
-        });
-    if wide {
-        draw_city_plan(ui.painter(), header.response.rect, colors);
-    }
-}
-
-fn draw_city_plan(painter: &egui::Painter, banner: egui::Rect, colors: [Color32; 3]) {
-    let origin = banner.right_top() + egui::vec2(-172.0, banner.height() * 0.55);
-    let plan = |column: f32, row: f32, floor: f32| {
-        origin + egui::vec2(15.0 * (column + row), 7.5 * (column - row) - floor)
-    };
-    let grid = Stroke::new(1.0_f32, BORDER);
-    for lane in 0..=5 {
-        let lane = lane as f32;
-        painter.line_segment([plan(lane, 0.0, 0.0), plan(lane, 5.0, 0.0)], grid);
-        painter.line_segment([plan(0.0, lane, 0.0), plan(5.0, lane, 0.0)], grid);
-    }
-    for ((column, row, height), color) in [
-        (0.7, 2.7, 12.0),
-        (2.1, 2.1, 25.0),
-        (3.5, 1.1, 16.0),
-        (2.9, 3.6, 32.0),
-    ]
-    .into_iter()
-    .zip(colors.into_iter().cycle())
-    {
-        let outline = Stroke::new(1.0_f32, color.gamma_multiply(0.65));
-        let points = [
-            (column, row),
-            (column + 0.8, row),
-            (column + 0.8, row + 0.8),
-            (column, row + 0.8),
-        ];
-        let roof = points
-            .iter()
-            .map(|&(x, y)| plan(x, y, height))
-            .collect::<Vec<_>>();
-        painter.add(egui::Shape::convex_polygon(
-            roof,
-            color.gamma_multiply(0.2),
-            outline,
-        ));
-        for &(x, y) in &points[..3] {
-            painter.line_segment([plan(x, y, 0.0), plan(x, y, height)], outline);
-        }
-    }
-}
-
-fn progression_panel(ui: &mut egui::Ui, document: &mut Save, selected: usize, locale: Locale) {
-    let (level_key, xp_key) = document.game.progression();
-    let level = document
-        .fields
-        .iter()
-        .find(|field| field.snapshot == selected && field.path == level_key)
-        .and_then(|field| field.value.parse::<i64>().ok());
-    let Some(level) = level else { return };
-    let Some(xp) = document
-        .fields
-        .iter_mut()
-        .find(|field| field.snapshot == selected && field.path == xp_key)
-    else {
-        return;
-    };
-    let Some(threshold) = document.game.next_level_xp(level) else {
-        return;
-    };
-    let amount = xp.value.parse::<i64>().unwrap_or(0);
-    Frame::new()
-        .fill(SIDEBAR)
-        .stroke(Stroke::new(1.0_f32, BORDER))
-        .corner_radius(12)
-        .inner_margin(Margin::symmetric(14, 10))
-        .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(format!("{} {level}", locale.text("level")))
-                        .strong()
-                        .size(18.0),
-                );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui
-                        .add_enabled(amount != 0, egui::Button::new(locale.text("reset_xp")))
-                        .clicked()
-                    {
-                        xp.value = "0".to_owned();
-                    }
-                });
-            });
-            ui.add(
-                egui::ProgressBar::new((amount.max(0) as f32 / threshold as f32).clamp(0.0, 1.0))
-                    .fill(logo_colors(document.game)[0])
-                    .desired_height(5.0)
-                    .corner_radius(3),
-            );
-            ui.label(
-                RichText::new(
-                    locale
-                        .text("xp_progress")
-                        .replace("{xp}", &amount.to_string())
-                        .replace("{total}", &threshold.to_string()),
-                )
-                .color(MUTED)
-                .size(12.0),
-            );
-        });
-    ui.add_space(5.0);
-}
-
-fn edit_progression(
-    ui: &mut egui::Ui,
-    progress: &mut Progress,
-    section: &mut usize,
-    search: &mut String,
-    snapshot: usize,
-    locale: Locale,
-) {
-    let sections: &[(&str, &str)] = match progress {
-        Progress::Pc1(_) => &[
-            ("treasure_unlocks", "treasure_help"),
-            ("city_policies", "policy_help"),
-            ("city_quests", "pc1_quest_help"),
-            ("economy", "pc1_tax_help"),
-        ],
-        Progress::Pc2(_) => &[
-            ("research", "research_state_help"),
-            ("city_pets", "pet_help"),
-            ("event_cooldowns", "event_cooldowns_help"),
-            ("economy", "pc2_tax_help"),
-        ],
-    };
-    *section = (*section).min(sections.len() - 1);
-    ui.horizontal_wrapped(|ui| {
-        for (index, &(label, _)) in sections.iter().enumerate() {
-            if ui
-                .selectable_label(*section == index, locale.text(label))
-                .clicked()
-            {
-                *section = index;
-                search.clear();
-            }
-        }
-    });
-    ui.label(RichText::new(locale.text(sections[*section].1)).color(MUTED));
-    let label = locale.text("search");
-    if *section != 3 {
-        ui.add(
-            TextEdit::singleline(search)
-                .hint_text(label)
-                .desired_width(275.0),
-        )
-        .on_hover_text(label);
-    }
-    let query = search.trim().to_lowercase();
-    let matches = |name: &str, id: &str| {
-        query.is_empty() || name.to_lowercase().contains(&query) || id.contains(&query)
-    };
-    let game = match progress {
-        Progress::Pc1(_) => Game::One,
-        Progress::Pc2(_) => Game::Two,
-    };
-    let accent = logo_colors(game)[0];
-    egui::ScrollArea::vertical()
-        .id_salt(("progression", game == Game::Two, *section, snapshot))
-        .show(ui, |ui| {
-            Frame::new()
-                .fill(SURFACE)
-                .stroke(Stroke::new(1.0_f32, BORDER))
-                .corner_radius(10)
-                .inner_margin(Margin::same(14))
-                .show(ui, |ui| {
-                    ui.set_min_width(ui.available_width());
-                    let mut count = 0;
-                    match (progress, *section) {
-                        (progress, 3) => {
-                            count = economy_controls(ui, progress, game, accent, locale);
-                        }
-                        (Progress::Pc1(city), 0) => {
-                            for (index, &(id, key)) in CHEST_BUILDINGS.iter().enumerate() {
-                                let name = locale.text(key);
-                                if let Some(unlocked) = city.treasure(index)
-                                    && matches(name, id)
-                                {
-                                    progress_row(ui, accent, name, "", |ui| {
-                                        if unlocked {
-                                            ui.label(locale.text("unlocked_state"));
-                                        } else if ui.button(locale.text("unlock_one")).clicked() {
-                                            city.unlock_treasure(index);
-                                        }
-                                    });
-                                    count += 1;
-                                }
-                            }
-                        }
-                        (Progress::Pc1(city), 1) => {
-                            for &(id, name, cost, parent) in POLICIES {
-                                let name = locale.get(&format!("pc1_policy_{id}")).unwrap_or(name);
-                                if let Some(enabled) = city.policy(id)
-                                    && matches(name, &id.to_string())
-                                {
-                                    let mut help = locale
-                                        .text("policy_cost")
-                                        .replace("{n}", &cost.to_string());
-                                    if let Some((parent, name, _, _)) =
-                                        POLICIES.iter().find(|row| Some(row.0) == parent)
-                                    {
-                                        let name = locale
-                                            .get(&format!("pc1_policy_{parent}"))
-                                            .unwrap_or(name);
-                                        help.push_str(" · ");
-                                        help.push_str(
-                                            &locale.text("requires_name").replace("{name}", name),
-                                        );
-                                    }
-                                    progress_row(ui, accent, name, &help, |ui| {
-                                        if ui
-                                            .add_enabled(
-                                                city.can_set_policy(id),
-                                                egui::Button::new(locale.text(if enabled {
-                                                    "remove_policy"
-                                                } else {
-                                                    "approve_policy"
-                                                })),
-                                            )
-                                            .clicked()
-                                        {
-                                            city.toggle_policy(id);
-                                        }
-                                    });
-                                    count += 1;
-                                }
-                            }
-                        }
-                        (Progress::Pc1(city), _) => {
-                            for &(id, name) in PC1_QUESTS {
-                                let name = locale.get(&format!("pc1_quest_{id}")).unwrap_or(name);
-                                if let Some(state) = city.quest(id)
-                                    && matches(name, &id.to_string())
-                                {
-                                    let status = locale.text(match state {
-                                        QuestState::Unavailable => "quest_unavailable",
-                                        QuestState::Active => "quest_active",
-                                        QuestState::Unread => "quest_unread",
-                                        QuestState::Claimable => "quest_claimable",
-                                        QuestState::Archived => "quest_archived",
-                                    });
-                                    progress_row(ui, accent, name, status, |ui| {
-                                        let action = if city.quest_pending(id) {
-                                            Some("undo_change")
-                                        } else if matches!(
-                                            state,
-                                            QuestState::Active | QuestState::Unread
-                                        ) {
-                                            Some("ready_for_claim")
-                                        } else {
-                                            None
-                                        };
-                                        if let Some(action) = action
-                                            && ui.button(locale.text(action)).clicked()
-                                        {
-                                            city.toggle_quest_claim(id);
-                                        }
-                                    });
-                                    count += 1;
-                                }
-                            }
-                        }
-                        (Progress::Pc2(city), 0) => {
-                            if ui
-                                .add_enabled(
-                                    RESEARCH.iter().any(|&(id, _)| {
-                                        city.research(id) == Some(ResearchState::Locked)
-                                    }),
-                                    egui::Button::new(locale.text("complete_research")),
-                                )
-                                .clicked()
-                            {
-                                city.unlock_all_research();
-                            }
-                            for &(id, name) in RESEARCH {
-                                if let Some(state) = city.research(id)
-                                    && matches(name, &id.to_string())
-                                {
-                                    let help = RESEARCH_PARENTS
-                                        .iter()
-                                        .find(|&&(child, _)| child == id)
-                                        .and_then(|&(_, parent)| {
-                                            RESEARCH.iter().find(|row| row.0 == parent)
-                                        })
-                                        .map(|&(_, name)| {
-                                            locale.text("requires_name").replace("{name}", name)
-                                        })
-                                        .unwrap_or_default();
-                                    let state_label = |state| {
-                                        locale.text(match state {
-                                            ResearchState::Locked => "research_locked",
-                                            ResearchState::Active => "research_active",
-                                            ResearchState::Disabled => "research_inactive",
-                                        })
-                                    };
-                                    progress_row(ui, accent, name, &help, |ui| {
-                                        egui::ComboBox::from_id_salt(("research-status", id))
-                                            .selected_text(state_label(state))
-                                            .show_ui(ui, |ui| {
-                                                for value in [
-                                                    ResearchState::Locked,
-                                                    ResearchState::Active,
-                                                    ResearchState::Disabled,
-                                                ] {
-                                                    if ui
-                                                        .add_enabled(
-                                                            city.can_set_research(id, value),
-                                                            egui::Button::selectable(
-                                                                value == state,
-                                                                state_label(value),
-                                                            ),
-                                                        )
-                                                        .clicked()
-                                                    {
-                                                        city.set_research(id, value);
-                                                        ui.close();
-                                                    }
-                                                }
-                                            });
-                                    });
-                                    count += 1;
-                                }
-                            }
-                        }
-                        (Progress::Pc2(city), 1) => {
-                            for &(id, key) in PETS {
-                                let name = locale.text(key);
-                                if let Some(mut value) = city.pet(id)
-                                    && matches(name, &id.to_string())
-                                {
-                                    progress_row(ui, accent, name, "", |ui| {
-                                        if ui
-                                            .add(
-                                                egui::Slider::new(&mut value, 0..=10)
-                                                    .text(locale.text("pet_wellbeing"))
-                                                    .clamping(egui::SliderClamping::Edits),
-                                            )
-                                            .changed()
-                                        {
-                                            city.set_pet(id, value);
-                                        }
-                                        if let Some(follows) = city.pet_following(id) {
-                                            ui.label(locale.text(if follows {
-                                                "pet_following"
-                                            } else {
-                                                "pet_at_home"
-                                            }));
-                                            if ui
-                                                .button(locale.text(if follows {
-                                                    "pet_send_home"
-                                                } else {
-                                                    "pet_follow_mayor"
-                                                }))
-                                                .clicked()
-                                            {
-                                                city.toggle_follower(id);
-                                            }
-                                        }
-                                    });
-                                    count += 1;
-                                }
-                            }
-                        }
-                        (Progress::Pc2(city), _) => {
-                            for &(id, name) in EVENTS {
-                                if let Some((seconds, cleared)) = city.cooldown(id)
-                                    && matches(name, &id.to_string())
-                                {
-                                    let description = if cleared {
-                                        locale.text("cooldown_clear_pending").to_owned()
-                                    } else {
-                                        locale.text("cooldown_remaining").replace(
-                                            "{n}",
-                                            &format!("{:.0}", seconds.max(0.0).ceil()),
-                                        )
-                                    };
-                                    progress_row(ui, accent, name, &description, |ui| {
-                                        if ui
-                                            .button(locale.text(if cleared {
-                                                "undo_change"
-                                            } else {
-                                                "clear_cooldown"
-                                            }))
-                                            .clicked()
-                                        {
-                                            city.toggle_clear_cooldown(id);
-                                        }
-                                    });
-                                    count += 1;
-                                }
-                            }
-                        }
-                    }
-                    if count == 0 {
-                        ui.label(
-                            RichText::new(locale.text(match (game, *section, query.is_empty()) {
-                                (Game::Two, 1, true) => "no_editable_pets",
-                                (Game::Two, 2, true) => "no_event_cooldowns",
-                                _ => "empty_fields",
-                            }))
-                            .color(MUTED),
-                        );
-                    }
-                });
-        });
-}
-
-fn economy_controls(
-    ui: &mut egui::Ui,
-    progress: &mut Progress,
-    game: Game,
-    accent: Color32,
-    locale: Locale,
-) -> usize {
-    let mut shown = 0;
-    let as_percent = |rate: f64| format!("{:.0}%", rate * 100.0);
-    for (index, key) in TAX_LABELS.into_iter().enumerate() {
-        let Some(rate) = progress.tax(index) else {
-            continue;
-        };
-        let name = locale.text(key);
-        progress_row(ui, accent, name, "", |ui| match game {
-            Game::One => {
-                egui::ComboBox::from_id_salt(("tax", index))
-                    .selected_text(as_percent(rate))
-                    .show_ui(ui, |ui| {
-                        for (preset, candidate) in PC1_TAX_PRESETS.into_iter().enumerate() {
-                            if ui
-                                .selectable_label(candidate == rate, as_percent(candidate))
-                                .clicked()
-                            {
-                                progress.set_tax_preset(index, preset);
-                            }
-                        }
-                    });
-            }
-            Game::Two => {
-                let mut percent = (rate * 100.0).round() as i64;
-                if ui
-                    .add(
-                        egui::Slider::new(&mut percent, 0..=i64::from(PC2_MAX_TAX_PERCENT))
-                            .suffix("%")
-                            .clamping(egui::SliderClamping::Edits),
-                    )
-                    .changed()
-                {
-                    progress.set_tax_percent(index, percent as u8);
-                }
-            }
-        });
-        shown += 1;
-    }
-    if let Some((principal, cleared)) = progress.debt() {
-        let amount = format!("${}", if cleared { 0 } else { principal });
-        let title = format!("{} · {amount}", locale.text("loan"));
-        progress_row(ui, accent, &title, locale.text("debt_help"), |ui| {
-            if ui
-                .add_enabled(
-                    principal > 0,
-                    egui::Button::new(locale.text(if cleared {
-                        "undo_change"
-                    } else {
-                        "clear_debt"
-                    })),
-                )
-                .clicked()
-            {
-                progress.toggle_clear_debt();
-            }
-        });
-        shown += 1;
-    }
-    shown
-}
-
-fn progress_row(
-    ui: &mut egui::Ui,
-    accent: Color32,
-    name: &str,
-    help: &str,
-    controls: impl FnOnce(&mut egui::Ui),
-) {
-    ui.push_id(name, |ui| {
-        ui.separator();
-        ui.vertical(|ui| {
-            ui.label(RichText::new(name).color(accent).strong());
-            if !help.is_empty() {
-                ui.label(RichText::new(help).color(MUTED).size(13.0));
-            }
-            ui.horizontal_wrapped(controls);
-        });
-    });
-}
-
-fn apply_collection(document: &mut Save, collection: Collection, value: &str) {
-    for &(id, _) in collection.catalog() {
-        let path = format!("{}.{id}", collection.key());
-        if let Some(field) = document.fields.iter_mut().find(|field| field.path == path)
-            && !field.locked(document.game)
-        {
-            field.value = value.to_owned();
-        }
-    }
-}
-
-fn city_mode_panel(ui: &mut egui::Ui, document: &Save, locale: Locale) {
-    let sandbox = document.pc2_sandbox();
-    let survival = document.pc2_survival();
-    let (label, color) = if survival {
-        ("survival_city", POCKET_CITY_2_COLORS[2])
-    } else if sandbox {
-        ("sandbox", WARM)
-    } else {
-        ("regular_city", POCKET_CITY_2_COLORS[0])
-    };
-    Frame::new()
-        .fill(SIDEBAR)
-        .stroke(Stroke::new(1.0_f32, BORDER))
-        .corner_radius(10)
-        .inner_margin(Margin::symmetric(14, 10))
-        .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.label(RichText::new(locale.text(label)).strong().color(color));
-            if sandbox {
-                ui.label(
-                    RichText::new(locale.text("sandbox_effects"))
-                        .color(MUTED)
-                        .size(13.0),
-                );
-            } else if !survival {
-                ui.label(
-                    RichText::new(locale.text("mode_help"))
-                        .color(MUTED)
-                        .size(13.0),
-                );
-            }
-        });
-    ui.add_space(4.0);
 }
 
 fn field_section(path: &str) -> Tab {

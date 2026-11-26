@@ -47,56 +47,6 @@ impl Locale {
     pub fn text(self, key: &str) -> &str {
         self.get(key).unwrap_or(key)
     }
-
-    pub fn install_fonts(self, ctx: &eframe::egui::Context) {
-        use eframe::egui::{FontData, FontDefinitions, FontFamily};
-        use std::path::PathBuf;
-
-        let mut fonts = FontDefinitions::default();
-        let mut families = Vec::new();
-        if let Some(windows) = std::env::var_os("WINDIR") {
-            let directory = PathBuf::from(windows).join("Fonts");
-            let cjk = match self.code() {
-                "zh-Hans" => ["msyh.ttc", "YuGothR.ttc", "malgun.ttf"],
-                "ko" => ["malgun.ttf", "YuGothR.ttc", "msyh.ttc"],
-                _ => ["YuGothR.ttc", "msyh.ttc", "malgun.ttf"],
-            };
-            for file in std::iter::once("segoeui.ttf").chain(cjk) {
-                if let Ok(bytes) = std::fs::read(directory.join(file)) {
-                    fonts
-                        .font_data
-                        .insert(file.into(), FontData::from_owned(bytes).into());
-                    families.push(file.to_owned());
-                }
-            }
-        } else {
-            for path in [
-                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-                "/System/Library/Fonts/PingFang.ttc",
-                "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
-                "/System/Library/Fonts/AppleSDGothicNeo.ttc",
-            ] {
-                if let Ok(bytes) = std::fs::read(path) {
-                    let mut font = FontData::from_owned(bytes);
-                    if path.contains("NotoSansCJK") {
-                        font.index = match self.code() {
-                            "ko" => 1,
-                            "zh-Hans" => 2,
-                            _ => 0,
-                        };
-                    }
-                    fonts.font_data.insert(path.into(), font.into());
-                    families.push(path.to_owned());
-                }
-            }
-        }
-        fonts
-            .families
-            .entry(FontFamily::Proportional)
-            .or_default()
-            .splice(0..0, families);
-        ctx.set_fonts(fonts);
-    }
 }
 
 fn catalog() -> &'static HashMap<&'static str, [&'static str; COUNT]> {

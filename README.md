@@ -1,6 +1,6 @@
 # Pocket City Save Editor 2.0
 
-Um aplicativo desktop em Rust e egui para editar saves locais de **Pocket City** e **Pocket City 2**. Funciona sem conexão com a internet. O seletor de idioma oferece português brasileiro, inglês, japonês, francês, italiano, alemão, espanhol da Espanha, tcheco, coreano, russo, chinês simplificado, espanhol da América Latina e ucraniano.
+Um aplicativo desktop em Rust com GPUI Kit para editar saves locais de **Pocket City** e **Pocket City 2**. Funciona sem conexão com a internet. O seletor de idioma oferece português brasileiro, inglês, japonês, francês, italiano, alemão, espanhol da Espanha, tcheco, coreano, russo, chinês simplificado, espanhol da América Latina e ucraniano.
 
 ## Como usar
 
