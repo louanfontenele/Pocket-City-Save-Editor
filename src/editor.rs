@@ -16,9 +16,7 @@ use gpui_kit::{
         label::Label,
         menu::{DropdownMenu, PopupMenuItem},
         progress::Progress as ProgressBar,
-        sidebar::{
-            Sidebar, SidebarFooter, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuItem,
-        },
+        sidebar::{Sidebar, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuItem},
         slider::{Slider, SliderEvent, SliderState},
         tab::{Tab as KitTab, TabBar},
         toolbar::Toolbar,
@@ -251,23 +249,14 @@ impl Editor {
         }
     }
 
-    fn open_button(&self, cx: &Context<Self>, id: &'static str, primary: bool) -> Button {
-        action(
-            cx,
-            id,
-            self.locale.text("open"),
-            primary,
-            true,
-            |this, window, cx| {
-                if let Some(path) = rfd::FileDialog::new().pick_file() {
-                    this.open(&path);
-                    if this.notice.is_none() {
-                        this.query
-                            .update(cx, |state, cx| state.set_value("", window, cx));
-                    }
-                }
-            },
-        )
+    fn open_from_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(path) = rfd::FileDialog::new().pick_file() {
+            self.open(&path);
+            if self.notice.is_none() {
+                self.query
+                    .update(cx, |state, cx| state.set_value("", window, cx));
+            }
+        }
     }
 
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -348,11 +337,8 @@ impl Editor {
             }
         }
         let editor = cx.weak_entity();
-        let language = Button::new("language")
-            .label(locale.name())
-            .icon(IconName::ChevronDown)
-            .small()
-            .ghost()
+        let language = library_action("language", locale.name(), IconName::Globe, true)
+            .accessibility_label(format!("{}, {}", locale.text("language"), locale.name()))
             .dropdown_menu(move |menu, _, _| {
                 Locale::ALL.into_iter().fold(menu, |menu, (code, name)| {
                     let editor = editor.clone();
@@ -368,41 +354,35 @@ impl Editor {
                     )
                 })
             });
-        let footer = SidebarFooter::new().child(
-            div()
-                .w_full()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(self.open_button(cx, "open", false).w_full())
-                .child(
-                    action(
-                        cx,
-                        "folder",
-                        locale.text("folder"),
-                        false,
-                        true,
-                        |this, _, _| {
-                            if let Some(folder) = rfd::FileDialog::new().pick_folder()
-                                && !this.folders.contains(&folder)
-                            {
-                                this.folders.push(folder);
-                                this.refresh();
-                            }
-                        },
-                    )
-                    .w_full(),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap_2()
-                        .child(subtle(locale.text("language")))
-                        .child(language),
+        let footer = div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .border_t_1()
+            .border_color(rgb(BORDER))
+            .pt_2()
+            .child(
+                library_action("open", locale.text("open"), IconName::File, false).on_click(
+                    cx.listener(|this, _, window, cx| {
+                        this.open_from_dialog(window, cx);
+                        cx.notify();
+                    }),
                 ),
-        );
+            )
+            .child(
+                library_action("folder", locale.text("folder"), IconName::FolderOpen, false)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(folder) = rfd::FileDialog::new().pick_folder()
+                            && !this.folders.contains(&folder)
+                        {
+                            this.folders.push(folder);
+                            this.refresh();
+                            cx.notify();
+                        }
+                    })),
+            )
+            .child(language);
         Sidebar::new("save-library")
             .w(px(280.0))
             .collapsible(false)
@@ -453,7 +433,14 @@ impl Editor {
                 .p_8()
                 .child(Label::new(self.game.title()).text_3xl().font_semibold())
                 .child(subtle(locale.text("choose")))
-                .child(self.open_button(cx, "empty-open", true))
+                .child(action(
+                    cx,
+                    "empty-open",
+                    locale.text("open"),
+                    true,
+                    true,
+                    Self::open_from_dialog,
+                ))
                 .when_some(self.notice.as_ref(), |view, (_, message)| {
                     view.child(subtle(message.clone()))
                 });
@@ -1106,6 +1093,23 @@ impl Render for Editor {
             .child(self.sidebar(cx))
             .child(self.document(window, cx))
     }
+}
+
+fn library_action(id: &'static str, label: &'static str, icon: IconName, menu: bool) -> Button {
+    Button::new(id)
+        .ghost()
+        .w_full()
+        .accessibility_label(label)
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(icon)
+                .child(div().min_w_0().flex_1().truncate().child(label))
+                .when(menu, |row| row.child(IconName::ChevronDown)),
+        )
 }
 
 fn action(
