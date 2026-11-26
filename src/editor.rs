@@ -4,7 +4,9 @@ use crate::{
     progression_catalog::{CHEST_BUILDINGS, EVENTS, PC1_QUESTS, PETS, POLICIES, RESEARCH_PARENTS},
     save::{
         self, Game, Kind, Save,
-        progress::{Progress, QuestState, ResearchState},
+        progress::{
+            PC1_TAX_PRESETS, PC2_MAX_TAX_PERCENT, Progress, QuestState, ResearchState, TAX_LABELS,
+        },
     },
 };
 use eframe::egui::{self, Align, Color32, Frame, Layout, Margin, RichText, Stroke, TextEdit};
@@ -1146,11 +1148,13 @@ fn edit_progression(
             ("treasure_unlocks", "treasure_help"),
             ("city_policies", "policy_help"),
             ("city_quests", "pc1_quest_help"),
+            ("economy", "pc1_tax_help"),
         ],
         Progress::Pc2(_) => &[
             ("research", "research_state_help"),
             ("city_pets", "pet_help"),
             ("event_cooldowns", "event_cooldowns_help"),
+            ("economy", "pc2_tax_help"),
         ],
     };
     *section = (*section).min(sections.len() - 1);
@@ -1167,12 +1171,14 @@ fn edit_progression(
     });
     ui.label(RichText::new(locale.text(sections[*section].1)).color(MUTED));
     let label = locale.text("search");
-    ui.add(
-        TextEdit::singleline(search)
-            .hint_text(label)
-            .desired_width(275.0),
-    )
-    .on_hover_text(label);
+    if *section != 3 {
+        ui.add(
+            TextEdit::singleline(search)
+                .hint_text(label)
+                .desired_width(275.0),
+        )
+        .on_hover_text(label);
+    }
     let query = search.trim().to_lowercase();
     let matches = |name: &str, id: &str| {
         query.is_empty() || name.to_lowercase().contains(&query) || id.contains(&query)
@@ -1194,6 +1200,9 @@ fn edit_progression(
                     ui.set_min_width(ui.available_width());
                     let mut count = 0;
                     match (progress, *section) {
+                        (progress, 3) => {
+                            count = economy_controls(ui, progress, game, accent, locale);
+                        }
                         (Progress::Pc1(city), 0) => {
                             for (index, &(id, key)) in CHEST_BUILDINGS.iter().enumerate() {
                                 let name = locale.text(key);
@@ -1429,6 +1438,74 @@ fn edit_progression(
         });
 }
 
+fn economy_controls(
+    ui: &mut egui::Ui,
+    progress: &mut Progress,
+    game: Game,
+    accent: Color32,
+    locale: Locale,
+) -> usize {
+    let mut shown = 0;
+    let as_percent = |rate: f64| format!("{:.0}%", rate * 100.0);
+    for (index, key) in TAX_LABELS.into_iter().enumerate() {
+        let Some(rate) = progress.tax(index) else {
+            continue;
+        };
+        let name = locale.text(key);
+        progress_row(ui, accent, name, "", |ui| match game {
+            Game::One => {
+                egui::ComboBox::from_id_salt(("tax", index))
+                    .selected_text(as_percent(rate))
+                    .show_ui(ui, |ui| {
+                        for (preset, candidate) in PC1_TAX_PRESETS.into_iter().enumerate() {
+                            if ui
+                                .selectable_label(candidate == rate, as_percent(candidate))
+                                .clicked()
+                            {
+                                progress.set_tax_preset(index, preset);
+                            }
+                        }
+                    });
+            }
+            Game::Two => {
+                let mut percent = (rate * 100.0).round() as i64;
+                if ui
+                    .add(
+                        egui::Slider::new(&mut percent, 0..=i64::from(PC2_MAX_TAX_PERCENT))
+                            .suffix("%")
+                            .clamping(egui::SliderClamping::Edits),
+                    )
+                    .changed()
+                {
+                    progress.set_tax_percent(index, percent as u8);
+                }
+            }
+        });
+        shown += 1;
+    }
+    if let Some((principal, cleared)) = progress.debt() {
+        let amount = format!("${}", if cleared { 0 } else { principal });
+        let title = format!("{} · {amount}", locale.text("loan"));
+        progress_row(ui, accent, &title, locale.text("debt_help"), |ui| {
+            if ui
+                .add_enabled(
+                    principal > 0,
+                    egui::Button::new(locale.text(if cleared {
+                        "undo_change"
+                    } else {
+                        "clear_debt"
+                    })),
+                )
+                .clicked()
+            {
+                progress.toggle_clear_debt();
+            }
+        });
+        shown += 1;
+    }
+    shown
+}
+
 fn progress_row(
     ui: &mut egui::Ui,
     accent: Color32,
@@ -1510,12 +1587,8 @@ fn field_section(path: &str) -> Tab {
             | "dayProgress"
             | "researchPoints"
             | "population"
-            | "loanTaken"
             | "randomDisasters"
             | "survivalLifelines"
-            | "incomeTax"
-            | "propertyTax"
-            | "salesTax"
             | "difficulty"
             | "infiniteMoney"
             | "maxLevel"

@@ -22,6 +22,7 @@ No Pocket City 2, **Coleções e desbloqueios** inclui afinidade com 16 perfis d
 
 - **Progressão no Pocket City** libera as três construções dos baús, edita as 33 políticas com seus pré-requisitos e mostra as 66 missões. Para missões ativas, **Marcar objetivo cumprido** deixa a recompensa disponível para resgate no jogo.
 - **Progressão no Pocket City 2** controla o estado das 52 pesquisas, o bem-estar dos animais adotados, qual animal acompanha o prefeito e a espera registrada para eventos. Esses controles funcionam com as opções atuais de sandbox da cidade. [Regras de progressão dos dois jogos](docs/STEAM_PROGRESSION.md)
+- **Progressão → Economia** edita os impostos e permite zerar a dívida nos dois jogos. No Pocket City, 100% representa a cobrança padrão. No Pocket City 2, o número é a própria alíquota, entre 0% e 35%.
 
 A cidade passa a ser classificada como sandbox ao ativar qualquer uma das quatro opções de sandbox na visão geral. O editor mostra a classificação a partir dos valores pendentes. [Regras de sandbox e ciclo dos saves do Pocket City 2](docs/POCKET_CITY_2_SAVES.md)
 

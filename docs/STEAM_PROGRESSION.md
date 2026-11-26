@@ -64,6 +64,13 @@ The normal `Buildings.isUnlocked` path can apply an Expert-specific predicate, r
 - The normal `CompleteAndremoveQuest(QuestSettings)` route calls the type-specific completion callback, removes the active entry, records `true` in history, and separately handles rewards and affinity. Writing history alone bypasses these game actions. Resource-delivery quest types can have inventory side effects in their type-specific completion callback.
 - `IsQuestIDCompleted` checks key presence. `HasQuestBeenCompletedBefore` reads the stored Boolean. Both feed quest generation checks, so `false` has inconsistent results across paths. A coherent historical completion uses `true`, and absence represents a quest without a completion record.
 
+## Economy controls
+
+- Pocket City `EconomyHelper` reads `stats.globalSettings.taxes` as multipliers of `0.2`, `0.6`, `1`, `1.4`, and `1.8`. The editor displays these as percentages of the standard charge. It can add an absent tax object to the selected snapshot. `loans` stores IDs for the 50,000, 200,000 and 500,000 offers. The game charges 15% on repayment. The editor's debt action removes the known IDs and preserves other entries and cash.
+- Pocket City 2 `TaxSettings.Awake` sets the maximum slider value to 35. Each change method multiplies the displayed percentage by `0.01` and writes the corresponding `GameState` field. The editor stages the same fractional representation for existing fields. `BankLoanWindow.RepayLoan` changes the balance and principal separately, while `GetDailyInterest` derives interest from the saved principal. The editor's debt action sets the principal to zero and preserves cash. REA evidence `ev_7d7ff03382e90f1ecc602bffaf62cdea8ee985c71e9bca9363ab6040990f2cdb` contains the managed methods.
+
+Ghidra matched the three PC2 tax setters at `0057e68c`, `0057e6ec` and `0057e74c`, plus repayment and daily interest at `00542f90` and `00543018`, against the REA CIL body hashes.
+
 ## Verification
 
 For PC1, REA analyzed the installed JS bundle under `ev_05e92a50254385f5b860c0f6ae8d9f6a81c563b24652f4b6e82f8d0f369a804a`. Focused source reads traced the registration, load, claim and save callers. The catalog resolves every `_pushQuest` registration to a unique numeric ID from that bundle.

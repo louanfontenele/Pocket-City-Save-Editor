@@ -73,19 +73,21 @@ impl Game {
                 | "rng"
         ) || path.starts_with("regionFileIDs.")
             || (self == Self::Two
-                && [
-                    "researched.",
-                    "disabledResearch.",
-                    "pets.",
-                    "petStates.",
-                    "completedQuests.",
-                    "eventCooldowns.",
-                ]
-                .iter()
-                .any(|prefix| path.starts_with(prefix)))
+                && (matches!(path, "incomeTax" | "propertyTax" | "salesTax" | "loanTaken")
+                    || [
+                        "researched.",
+                        "disabledResearch.",
+                        "pets.",
+                        "petStates.",
+                        "completedQuests.",
+                        "eventCooldowns.",
+                    ]
+                    .iter()
+                    .any(|prefix| path.starts_with(prefix))))
             || (self == Self::One
                 && (path.starts_with("metadata.")
                     || path.starts_with("stats.globalSettings.chestunlockbuildings.")
+                    || path.starts_with("stats.globalSettings.taxes.")
                     || matches!(key, "size" | "index" | "uid" | "timestamp")))
     }
 }
@@ -1416,6 +1418,55 @@ mod tests {
         assert_eq!(edited.research(1), Some(ResearchState::Disabled));
         for &(id, _) in crate::catalog::RESEARCH.iter().filter(|row| row.0 != 1) {
             assert_eq!(edited.research(id), Some(ResearchState::Active));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn economy_uses_each_games_tax_units_without_touching_cash() -> Result<()> {
+        let pc1 = PC1.replace(
+            "\"money\":51",
+            "\"money\":51,\"globalSettings\":{\"loans\":[0,2,99],\"disasters\":1}",
+        );
+        let pc2 = PC2.replace("\"level\":4", "\"level\":4,\"loanTaken\":200000,\"incomeTax\":0.15,\"propertyTax\":0.15,\"salesTax\":0.15");
+        for (game, name, input, original_rate, updated_rate, principal) in [
+            (Game::One, "_city_test.save", pc1, 1.0, 1.8, 550_000),
+            (Game::Two, "city_test.es3", pc2, 0.15, 0.35, 200_000),
+        ] {
+            let path = PathBuf::from(name);
+            let mut save = Save::decode(path.clone(), input.as_bytes().to_vec())?;
+            let latest = save.latest;
+            let progress = save.progress[latest].as_mut().context("No economy data")?;
+            assert_eq!(progress.tax(0), Some(original_rate));
+            assert_eq!(progress.debt(), Some((principal, false)));
+            progress.toggle_clear_debt();
+            assert_eq!(progress.debt(), Some((principal, true)));
+            progress.toggle_clear_debt();
+            assert_eq!(save.output()?, input.as_bytes());
+            let progress = save.progress[latest].as_mut().unwrap();
+            progress.toggle_clear_debt();
+            progress.set_tax_preset(0, 4);
+            progress.set_tax_percent(0, 36);
+            if game == Game::Two {
+                assert_eq!(progress.tax(0), Some(original_rate));
+            }
+            progress.set_tax_percent(0, 35);
+            let updated = Save::decode(path, save.output()?)?;
+            let result = updated.progress[latest]
+                .as_ref()
+                .context("No rewritten economy data")?;
+            assert_eq!(result.tax(0), Some(updated_rate));
+            assert_eq!(result.tax(1), Some(original_rate));
+            assert_eq!(result.debt(), Some((0, false)));
+            if game == Game::One {
+                assert!(updated.source.contains("\"money\":51"));
+                assert!(updated.source.contains("\"loans\":[99]"));
+                assert!(updated.source.contains("\"disasters\":1"));
+                assert_eq!(updated.progress[0].as_ref().unwrap().tax(0), Some(1.0));
+            } else {
+                assert!(updated.source.contains("\"money\":601"));
+                assert!(updated.source.contains("\"incomeTax\":0.35"));
+            }
         }
         Ok(())
     }

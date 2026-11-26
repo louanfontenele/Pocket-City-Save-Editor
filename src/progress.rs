@@ -26,6 +26,13 @@ struct Staged<T> {
     pending: T,
 }
 
+pub const TAX_LABELS: [&str; 3] = ["income_tax", "property_tax", "sales_tax"];
+pub const PC1_TAX_PRESETS: [f64; 5] = [0.2, 0.6, 1.0, 1.4, 1.8];
+pub const PC2_MAX_TAX_PERCENT: u8 = 35;
+const PC1_TAX_FIELDS: [&str; 3] = ["income", "property", "sales"];
+const PC2_TAX_FIELDS: [&str; 3] = ["incomeTax", "propertyTax", "salesTax"];
+const PC1_LOANS: [i64; 3] = [50_000, 200_000, 500_000];
+
 impl<T: Clone> Staged<T> {
     fn new(value: T) -> Self {
         Self {
@@ -39,6 +46,8 @@ pub struct Pc1 {
     policies: Option<Staged<Vec<i32>>>,
     treasure: Option<Staged<[bool; 3]>>,
     quests: Option<Staged<Quests>>,
+    taxes: Staged<[Option<f64>; 3]>,
+    loans: Option<Staged<Vec<i32>>>,
 }
 
 #[derive(Clone)]
@@ -164,6 +173,8 @@ pub struct Pc2 {
     pets: Staged<BTreeMap<i32, i32>>,
     following: Option<Staged<BTreeMap<i32, bool>>>,
     cooldowns: BTreeMap<i32, (f32, bool)>,
+    taxes: Staged<[Option<f64>; 3]>,
+    loan: Staged<Option<i32>>,
 }
 
 impl Pc2 {
@@ -263,6 +274,75 @@ pub enum Progress {
 }
 
 impl Progress {
+    pub fn tax(&self, index: usize) -> Option<f64> {
+        match self {
+            Self::Pc1(city) => city.taxes.pending[index],
+            Self::Pc2(city) => city.taxes.pending[index],
+        }
+    }
+
+    pub fn set_tax_preset(&mut self, index: usize, preset: usize) {
+        if let Self::Pc1(city) = self
+            && city.taxes.pending[index].is_some()
+            && let Some(&value) = PC1_TAX_PRESETS.get(preset)
+        {
+            city.taxes.pending[index] = Some(value);
+        }
+    }
+
+    pub fn set_tax_percent(&mut self, index: usize, percent: u8) {
+        if let Self::Pc2(city) = self
+            && city.taxes.pending[index].is_some()
+            && percent <= PC2_MAX_TAX_PERCENT
+        {
+            city.taxes.pending[index] = Some(f64::from(percent) / 100.0);
+        }
+    }
+
+    pub fn debt(&self) -> Option<(i64, bool)> {
+        match self {
+            Self::Pc1(city) => {
+                let loans = city.loans.as_ref()?;
+                let principal = PC1_LOANS
+                    .iter()
+                    .enumerate()
+                    .filter(|(id, _)| loans.original.contains(&(*id as i32)))
+                    .map(|(_, principal)| principal)
+                    .sum();
+                Some((principal, loans.original != loans.pending))
+            }
+            Self::Pc2(city) => Some((
+                i64::from(city.loan.original?),
+                city.loan.original != city.loan.pending,
+            )),
+        }
+    }
+
+    pub fn toggle_clear_debt(&mut self) {
+        let Some((principal, cleared)) = self.debt() else {
+            return;
+        };
+        if principal <= 0 {
+            return;
+        }
+        match self {
+            Self::Pc1(city) => {
+                if let Some(loans) = &mut city.loans {
+                    if cleared {
+                        loans.pending.clone_from(&loans.original);
+                    } else {
+                        loans
+                            .pending
+                            .retain(|id| !(0..PC1_LOANS.len() as i32).contains(id));
+                    }
+                }
+            }
+            Self::Pc2(city) => {
+                city.loan.pending = if cleared { city.loan.original } else { Some(0) }
+            }
+        }
+    }
+
     pub(super) fn read(game: Game, record: &Node, source: &str) -> Option<Self> {
         let read_list = |node: Option<&Node>| {
             let Some(node) = node else {
@@ -278,10 +358,26 @@ impl Progress {
                 text.starts_with('{') || text == "null"
             })
         };
+        let number = |node: &Node| {
+            source[node.span.clone()]
+                .parse::<f64>()
+                .ok()
+                .filter(|value| value.is_finite())
+        };
         match game {
             Game::One => {
                 let stats = record.get("stats")?;
                 let settings = stats.get("globalSettings");
+                let taxes = settings.and_then(|node| node.get("taxes"));
+                let rates = std::array::from_fn(|index| {
+                    if !read_object(settings) || !read_object(taxes) {
+                        return None;
+                    }
+                    match taxes.and_then(|node| node.get(PC1_TAX_FIELDS[index])) {
+                        Some(node) => number(node),
+                        None => Some(1.0),
+                    }
+                });
                 let treasure = settings.and_then(|node| node.get("chestunlockbuildings"));
                 let treasure = (read_object(settings) && read_object(treasure)).then(|| {
                     Staged::new(std::array::from_fn(|index| {
@@ -314,6 +410,11 @@ impl Progress {
                     policies: read_list(stats.get("policies")).map(Staged::new),
                     treasure,
                     quests: quests(),
+                    taxes: Staged::new(rates),
+                    loans: read_object(settings)
+                        .then(|| read_list(settings.and_then(|node| node.get("loans"))))
+                        .flatten()
+                        .map(Staged::new),
                 }))
             }
             Game::Two => {
@@ -382,6 +483,14 @@ impl Progress {
                             seconds.is_finite().then_some((id, (seconds, false)))
                         })
                         .collect(),
+                    taxes: Staged::new(std::array::from_fn(|index| {
+                        record.get(PC2_TAX_FIELDS[index]).and_then(number)
+                    })),
+                    loan: Staged::new(
+                        record
+                            .get("loanTaken")
+                            .and_then(|node| source[node.span.clone()].parse().ok()),
+                    ),
                 }))
             }
         }
@@ -399,6 +508,24 @@ impl Progress {
         match self {
             Self::Pc1(state) => {
                 let put_list = |list: &[i32]| Some(format!("{list:?}"));
+                for (index, key) in PC1_TAX_FIELDS.into_iter().enumerate() {
+                    if let Some(value) = state.taxes.pending[index]
+                        && Some(value) != state.taxes.original[index]
+                    {
+                        set(
+                            &["stats", "globalSettings", "taxes", key],
+                            Some(value.to_string()),
+                        );
+                    }
+                }
+                if let Some(loans) = &state.loans
+                    && loans.original != loans.pending
+                {
+                    set(
+                        &["stats", "globalSettings", "loans"],
+                        put_list(&loans.pending),
+                    );
+                }
                 if let Some(policies) = &state.policies
                     && policies.pending != policies.original
                 {
@@ -435,6 +562,16 @@ impl Progress {
                 }
             }
             Self::Pc2(state) => {
+                for (index, key) in PC2_TAX_FIELDS.into_iter().enumerate() {
+                    if let Some(value) = state.taxes.pending[index]
+                        && Some(value) != state.taxes.original[index]
+                    {
+                        set(&[key], Some(value.to_string()));
+                    }
+                }
+                if state.loan.original != state.loan.pending {
+                    set(&["loanTaken"], Some("0".to_owned()));
+                }
                 if let Some(research) = &state.research {
                     if research.pending != research.original
                         && !state.has_disabled_research
