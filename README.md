@@ -6,7 +6,7 @@ Um aplicativo desktop em Rust e egui para editar saves locais de **Pocket City**
 
 1. Feche o jogo antes de editar o save.
 2. Selecione o jogo na barra lateral. A biblioteca procura arquivos nas pastas padrão do Windows. Use **Abrir arquivo**, arraste um save para a janela ou adicione outra pasta.
-3. Edite os campos em **Visão geral**, **Coleções** ou **Campos avançados**. Em Pocket City, selecione a versão automática ou manual da cidade.
+3. Edite os campos em **Visão geral**, **Coleções**, **Progressão** ou **Campos avançados**. Em Pocket City, selecione a versão automática ou manual da cidade.
 4. Clique em **Salvar alterações** para substituir o arquivo e guardar o original. **Exportar cópia** grava em um novo caminho. Para voltar a uma versão anterior, use **Backups**.
 
 O editor cria backups em `.pocket-city-editor-backups` ao lado do save. A biblioteca distingue saves principais e históricos de Pocket City 2. Ao reabrir uma cidade nesse jogo, o próprio jogo escolhe qual arquivo carregar. Confira se o arquivo editado é a versão que pretende abrir.
@@ -18,11 +18,14 @@ O editor cria backups em `.pocket-city-editor-backups` ao lado do save. A biblio
 
 Em **Visão geral**, os dois jogos permitem editar o nível e a experiência da cidade. O editor mostra o XP necessário para o próximo nível e permite zerar o progresso do nível atual.
 
-No Pocket City 2, **Coleções e desbloqueios** inclui afinidade com 16 perfis de NPCs, presentes pendentes, 130 construções com requisitos de progressão, recursos, veículos, pesquisas, inventário, marcos e melhorias de sobrevivência. Também é possível configurar estoques mínimos para venda ou conversão automática. Os níveis de afinidade vão de 0 a 999. **Construções bloqueadas** grava o desbloqueio por construção e mantém o nível e o modo atuais da cidade. Custos e regras de posicionamento continuam sendo avaliados pelo jogo.
+No Pocket City 2, **Coleções e desbloqueios** inclui afinidade com 16 perfis de NPCs, presentes pendentes, 130 construções com requisitos de progressão, recursos, veículos, inventário, marcos e melhorias de sobrevivência. Também é possível configurar estoques mínimos para venda ou conversão automática. Os níveis de afinidade vão de 0 a 999. **Construções bloqueadas** grava o desbloqueio por construção e mantém o nível e o modo atuais da cidade. Custos e regras de posicionamento continuam sendo avaliados pelo jogo.
+
+- **Progressão no Pocket City** libera as três construções dos baús, edita as 33 políticas com seus pré-requisitos e mostra as 66 missões. Para missões ativas, **Marcar objetivo cumprido** deixa a recompensa disponível para resgate no jogo.
+- **Progressão no Pocket City 2** controla o estado das 52 pesquisas, o bem-estar dos animais adotados, qual animal acompanha o prefeito e a espera registrada para eventos. Esses controles funcionam com as opções atuais de sandbox da cidade. [Regras de progressão dos dois jogos](docs/STEAM_PROGRESSION.md)
 
 A cidade passa a ser classificada como sandbox ao ativar qualquer uma das quatro opções de sandbox na visão geral. O editor mostra a classificação a partir dos valores pendentes. [Regras de sandbox e ciclo dos saves do Pocket City 2](docs/POCKET_CITY_2_SAVES.md)
 
-Os metadados da cidade de Pocket City 1, os IDs estruturais e as dimensões da malha aparecem somente para leitura. Grades e listas ficam preservadas no arquivo.
+Os metadados da cidade de Pocket City 1, os IDs estruturais e as dimensões da malha aparecem somente para leitura. As ações de progressão gravam os campos associados à ação escolhida.
 
 ## Build local
 

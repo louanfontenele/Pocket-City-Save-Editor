@@ -1,7 +1,11 @@
 use crate::{
-    catalog::{Collection, MAX_AFFINITY},
+    catalog::{Collection, MAX_AFFINITY, RESEARCH},
     locale::Locale,
-    save::{self, Game, Kind, Save},
+    progression_catalog::{CHEST_BUILDINGS, EVENTS, PC1_QUESTS, PETS, POLICIES, RESEARCH_PARENTS},
+    save::{
+        self, Game, Kind, Save,
+        progress::{Progress, QuestState, ResearchState},
+    },
 };
 use eframe::egui::{self, Align, Color32, Frame, Layout, Margin, RichText, Stroke, TextEdit};
 use std::path::{Path, PathBuf};
@@ -43,6 +47,7 @@ struct Entry {
 enum Tab {
     City,
     Collections,
+    Progress,
     Advanced,
     Backups,
 }
@@ -58,6 +63,7 @@ pub struct Editor {
     restore: Option<PathBuf>,
     snapshot: usize,
     collection: Collection,
+    progress_section: usize,
     locale: Locale,
 }
 
@@ -117,6 +123,7 @@ impl Editor {
             restore: None,
             snapshot: 0,
             collection: Collection::Affinity,
+            progress_section: 0,
             locale,
         };
         editor.refresh();
@@ -371,6 +378,13 @@ impl Editor {
         };
         let [accent, _, success] = logo_colors(document.game);
         let mut action = None;
+        let has_progress = document
+            .progress
+            .get(self.snapshot)
+            .is_some_and(Option::is_some);
+        if self.tab == Tab::Progress && !has_progress {
+            self.tab = Tab::City;
+        }
         let pending = document.changed();
         document_banner(ui, document, locale);
         if matches!(
@@ -418,9 +432,13 @@ impl Editor {
                     for (tab, label) in [
                         (Tab::City, locale.text("overview")),
                         (Tab::Collections, locale.text("collections")),
+                        (Tab::Progress, locale.text("progression_tab")),
                         (Tab::Advanced, locale.text("advanced")),
                         (Tab::Backups, locale.text("backups")),
                     ] {
+                        if tab == Tab::Progress && !has_progress {
+                            continue;
+                        }
                         if ui.selectable_label(self.tab == tab, label).clicked() {
                             self.tab = tab;
                             self.query.clear();
@@ -493,6 +511,21 @@ impl Editor {
                     ui.label(format!("{}\n{error:#}", locale.text("failed")));
                 }
             }
+        } else if self.tab == Tab::Progress {
+            if let Some(progress) = document
+                .progress
+                .get_mut(self.snapshot)
+                .and_then(Option::as_mut)
+            {
+                edit_progression(
+                    ui,
+                    progress,
+                    &mut self.progress_section,
+                    &mut self.query,
+                    self.snapshot,
+                    locale,
+                );
+            }
         } else {
             let query = self.query.trim().to_lowercase();
             if self.tab == Tab::Collections {
@@ -537,9 +570,6 @@ impl Editor {
                             }
                             Collection::Vehicles => {
                                 Some((locale.text("unlock_cars"), "true".to_owned()))
-                            }
-                            Collection::Research => {
-                                Some((locale.text("complete_research"), "true".to_owned()))
                             }
                             _ => None,
                         };
@@ -616,7 +646,7 @@ impl Editor {
                                                 self.collection.matches(&field.path)
                                             }
                                             Tab::Advanced => true,
-                                            Tab::Backups => false,
+                                            Tab::Backups | Tab::Progress => false,
                                         };
                                         let label = field_name(&field.path, &field.label, locale);
                                         if !is_visible
@@ -1101,6 +1131,321 @@ fn progression_panel(ui: &mut egui::Ui, document: &mut Save, selected: usize, lo
             );
         });
     ui.add_space(5.0);
+}
+
+fn edit_progression(
+    ui: &mut egui::Ui,
+    progress: &mut Progress,
+    section: &mut usize,
+    search: &mut String,
+    snapshot: usize,
+    locale: Locale,
+) {
+    let sections: &[(&str, &str)] = match progress {
+        Progress::Pc1(_) => &[
+            ("treasure_unlocks", "treasure_help"),
+            ("city_policies", "policy_help"),
+            ("city_quests", "pc1_quest_help"),
+        ],
+        Progress::Pc2(_) => &[
+            ("research", "research_state_help"),
+            ("city_pets", "pet_help"),
+            ("event_cooldowns", "event_cooldowns_help"),
+        ],
+    };
+    *section = (*section).min(sections.len() - 1);
+    ui.horizontal_wrapped(|ui| {
+        for (index, &(label, _)) in sections.iter().enumerate() {
+            if ui
+                .selectable_label(*section == index, locale.text(label))
+                .clicked()
+            {
+                *section = index;
+                search.clear();
+            }
+        }
+    });
+    ui.label(RichText::new(locale.text(sections[*section].1)).color(MUTED));
+    let label = locale.text("search");
+    ui.add(
+        TextEdit::singleline(search)
+            .hint_text(label)
+            .desired_width(275.0),
+    )
+    .on_hover_text(label);
+    let query = search.trim().to_lowercase();
+    let matches = |name: &str, id: &str| {
+        query.is_empty() || name.to_lowercase().contains(&query) || id.contains(&query)
+    };
+    let game = match progress {
+        Progress::Pc1(_) => Game::One,
+        Progress::Pc2(_) => Game::Two,
+    };
+    let accent = logo_colors(game)[0];
+    egui::ScrollArea::vertical()
+        .id_salt(("progression", game == Game::Two, *section, snapshot))
+        .show(ui, |ui| {
+            Frame::new()
+                .fill(SURFACE)
+                .stroke(Stroke::new(1.0_f32, BORDER))
+                .corner_radius(10)
+                .inner_margin(Margin::same(14))
+                .show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    let mut count = 0;
+                    match (progress, *section) {
+                        (Progress::Pc1(city), 0) => {
+                            for (index, &(id, key)) in CHEST_BUILDINGS.iter().enumerate() {
+                                let name = locale.text(key);
+                                if let Some(unlocked) = city.treasure(index)
+                                    && matches(name, id)
+                                {
+                                    progress_row(ui, accent, name, "", |ui| {
+                                        if unlocked {
+                                            ui.label(locale.text("unlocked_state"));
+                                        } else if ui.button(locale.text("unlock_one")).clicked() {
+                                            city.unlock_treasure(index);
+                                        }
+                                    });
+                                    count += 1;
+                                }
+                            }
+                        }
+                        (Progress::Pc1(city), 1) => {
+                            for &(id, name, cost, parent) in POLICIES {
+                                let name = locale.get(&format!("pc1_policy_{id}")).unwrap_or(name);
+                                if let Some(enabled) = city.policy(id)
+                                    && matches(name, &id.to_string())
+                                {
+                                    let mut help = locale
+                                        .text("policy_cost")
+                                        .replace("{n}", &cost.to_string());
+                                    if let Some((parent, name, _, _)) =
+                                        POLICIES.iter().find(|row| Some(row.0) == parent)
+                                    {
+                                        let name = locale
+                                            .get(&format!("pc1_policy_{parent}"))
+                                            .unwrap_or(name);
+                                        help.push_str(" · ");
+                                        help.push_str(
+                                            &locale.text("requires_name").replace("{name}", name),
+                                        );
+                                    }
+                                    progress_row(ui, accent, name, &help, |ui| {
+                                        if ui
+                                            .add_enabled(
+                                                city.can_set_policy(id),
+                                                egui::Button::new(locale.text(if enabled {
+                                                    "remove_policy"
+                                                } else {
+                                                    "approve_policy"
+                                                })),
+                                            )
+                                            .clicked()
+                                        {
+                                            city.toggle_policy(id);
+                                        }
+                                    });
+                                    count += 1;
+                                }
+                            }
+                        }
+                        (Progress::Pc1(city), _) => {
+                            for &(id, name) in PC1_QUESTS {
+                                let name = locale.get(&format!("pc1_quest_{id}")).unwrap_or(name);
+                                if let Some(state) = city.quest(id)
+                                    && matches(name, &id.to_string())
+                                {
+                                    let status = locale.text(match state {
+                                        QuestState::Unavailable => "quest_unavailable",
+                                        QuestState::Active => "quest_active",
+                                        QuestState::Unread => "quest_unread",
+                                        QuestState::Claimable => "quest_claimable",
+                                        QuestState::Archived => "quest_archived",
+                                    });
+                                    progress_row(ui, accent, name, status, |ui| {
+                                        let action = if city.quest_pending(id) {
+                                            Some("undo_change")
+                                        } else if matches!(
+                                            state,
+                                            QuestState::Active | QuestState::Unread
+                                        ) {
+                                            Some("ready_for_claim")
+                                        } else {
+                                            None
+                                        };
+                                        if let Some(action) = action
+                                            && ui.button(locale.text(action)).clicked()
+                                        {
+                                            city.toggle_quest_claim(id);
+                                        }
+                                    });
+                                    count += 1;
+                                }
+                            }
+                        }
+                        (Progress::Pc2(city), 0) => {
+                            if ui
+                                .add_enabled(
+                                    RESEARCH.iter().any(|&(id, _)| {
+                                        city.research(id) == Some(ResearchState::Locked)
+                                    }),
+                                    egui::Button::new(locale.text("complete_research")),
+                                )
+                                .clicked()
+                            {
+                                city.unlock_all_research();
+                            }
+                            for &(id, name) in RESEARCH {
+                                if let Some(state) = city.research(id)
+                                    && matches(name, &id.to_string())
+                                {
+                                    let help = RESEARCH_PARENTS
+                                        .iter()
+                                        .find(|&&(child, _)| child == id)
+                                        .and_then(|&(_, parent)| {
+                                            RESEARCH.iter().find(|row| row.0 == parent)
+                                        })
+                                        .map(|&(_, name)| {
+                                            locale.text("requires_name").replace("{name}", name)
+                                        })
+                                        .unwrap_or_default();
+                                    let state_label = |state| {
+                                        locale.text(match state {
+                                            ResearchState::Locked => "research_locked",
+                                            ResearchState::Active => "research_active",
+                                            ResearchState::Disabled => "research_inactive",
+                                        })
+                                    };
+                                    progress_row(ui, accent, name, &help, |ui| {
+                                        egui::ComboBox::from_id_salt(("research-status", id))
+                                            .selected_text(state_label(state))
+                                            .show_ui(ui, |ui| {
+                                                for value in [
+                                                    ResearchState::Locked,
+                                                    ResearchState::Active,
+                                                    ResearchState::Disabled,
+                                                ] {
+                                                    if ui
+                                                        .add_enabled(
+                                                            city.can_set_research(id, value),
+                                                            egui::Button::selectable(
+                                                                value == state,
+                                                                state_label(value),
+                                                            ),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        city.set_research(id, value);
+                                                        ui.close();
+                                                    }
+                                                }
+                                            });
+                                    });
+                                    count += 1;
+                                }
+                            }
+                        }
+                        (Progress::Pc2(city), 1) => {
+                            for &(id, key) in PETS {
+                                let name = locale.text(key);
+                                if let Some(mut value) = city.pet(id)
+                                    && matches(name, &id.to_string())
+                                {
+                                    progress_row(ui, accent, name, "", |ui| {
+                                        if ui
+                                            .add(
+                                                egui::Slider::new(&mut value, 0..=10)
+                                                    .text(locale.text("pet_wellbeing"))
+                                                    .clamping(egui::SliderClamping::Edits),
+                                            )
+                                            .changed()
+                                        {
+                                            city.set_pet(id, value);
+                                        }
+                                        if let Some(follows) = city.pet_following(id) {
+                                            ui.label(locale.text(if follows {
+                                                "pet_following"
+                                            } else {
+                                                "pet_at_home"
+                                            }));
+                                            if ui
+                                                .button(locale.text(if follows {
+                                                    "pet_send_home"
+                                                } else {
+                                                    "pet_follow_mayor"
+                                                }))
+                                                .clicked()
+                                            {
+                                                city.toggle_follower(id);
+                                            }
+                                        }
+                                    });
+                                    count += 1;
+                                }
+                            }
+                        }
+                        (Progress::Pc2(city), _) => {
+                            for &(id, name) in EVENTS {
+                                if let Some((seconds, cleared)) = city.cooldown(id)
+                                    && matches(name, &id.to_string())
+                                {
+                                    let description = if cleared {
+                                        locale.text("cooldown_clear_pending").to_owned()
+                                    } else {
+                                        locale.text("cooldown_remaining").replace(
+                                            "{n}",
+                                            &format!("{:.0}", seconds.max(0.0).ceil()),
+                                        )
+                                    };
+                                    progress_row(ui, accent, name, &description, |ui| {
+                                        if ui
+                                            .button(locale.text(if cleared {
+                                                "undo_change"
+                                            } else {
+                                                "clear_cooldown"
+                                            }))
+                                            .clicked()
+                                        {
+                                            city.toggle_clear_cooldown(id);
+                                        }
+                                    });
+                                    count += 1;
+                                }
+                            }
+                        }
+                    }
+                    if count == 0 {
+                        ui.label(
+                            RichText::new(locale.text(match (game, *section, query.is_empty()) {
+                                (Game::Two, 1, true) => "no_editable_pets",
+                                (Game::Two, 2, true) => "no_event_cooldowns",
+                                _ => "empty_fields",
+                            }))
+                            .color(MUTED),
+                        );
+                    }
+                });
+        });
+}
+
+fn progress_row(
+    ui: &mut egui::Ui,
+    accent: Color32,
+    name: &str,
+    help: &str,
+    controls: impl FnOnce(&mut egui::Ui),
+) {
+    ui.push_id(name, |ui| {
+        ui.separator();
+        ui.vertical(|ui| {
+            ui.label(RichText::new(name).color(accent).strong());
+            if !help.is_empty() {
+                ui.label(RichText::new(help).color(MUTED).size(13.0));
+            }
+            ui.horizontal_wrapped(controls);
+        });
+    });
 }
 
 fn apply_collection(document: &mut Save, collection: Collection, value: &str) {

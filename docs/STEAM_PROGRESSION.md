@@ -84,3 +84,8 @@ For PC2, REA inspected managed members under `ev_b21ab439a113c0b09de76d08f844718
 | `Research.UnlockResearch` | `004bf6f0` |
 
 These checks establish static behavior in the fingerprinted builds. Reopening edited saves and claiming generated rewards in the game remain unverified. Creating PC2 quest instances would also require resolving each template's runtime arguments, placement and reward logic.
+
+### Additional verification for the editor controls
+
+- `PetManager.SetPetFollowing` at `00447abc` calls `SetAllPetsStopFollowing` at `00447a04` before assigning the follower. `RefreshOwnedPetList` at `00447f38` and `AddWellBeing` at `004483c8` read the separate care state. The editor mirrors the single-follower rule for existing pets and writes well-being without changing care dates. Ghidra matched these CIL bodies to REA evidence `ev_23445a6161f5d36609971e259c024091994c35873c7df4a17b913c48ba7cbc5e`.
+- `CityEvents.IsInCooldown` tests `eventCooldowns.ContainsKey(id)`. The normal timer deletes the entry when its remaining time reaches zero. The editor removes the selected key to match that state, including when the file contains a stale zero. Event definitions, level, costs and other launch requirements stay under the game's own checks. REA inspected `CityEvents` and `EventRow` under `ev_910daa5dfa5ab75a1d67d69fc126ccdea1c3288bf727568fd1b6907f6581bc0f`.

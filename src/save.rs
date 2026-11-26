@@ -10,6 +10,10 @@ use std::{
 };
 use tempfile::NamedTempFile;
 
+#[path = "progress.rs"]
+pub mod progress;
+use progress::Progress;
+
 const MAX_BYTES: usize = 64 * 1024 * 1024;
 pub const PC2_SANDBOX_FLAGS: [&str; 4] =
     ["unlockAll", "infiniteMoney", "disableQuests", "maxLevel"];
@@ -68,8 +72,20 @@ impl Game {
                 | "SEED"
                 | "rng"
         ) || path.starts_with("regionFileIDs.")
+            || (self == Self::Two
+                && [
+                    "researched.",
+                    "disabledResearch.",
+                    "pets.",
+                    "petStates.",
+                    "completedQuests.",
+                    "eventCooldowns.",
+                ]
+                .iter()
+                .any(|prefix| path.starts_with(prefix)))
             || (self == Self::One
                 && (path.starts_with("metadata.")
+                    || path.starts_with("stats.globalSettings.chestunlockbuildings.")
                     || matches!(key, "size" | "index" | "uid" | "timestamp")))
     }
 }
@@ -77,6 +93,7 @@ impl Game {
 #[derive(Debug)]
 struct Node {
     span: Range<usize>,
+    key_start: usize,
     children: Vec<(String, Node)>,
 }
 
@@ -127,6 +144,7 @@ impl Parser<'_> {
                 if self.next() != Some(close) {
                     loop {
                         self.next();
+                        let key_start = self.position;
                         let key = if token == b'{'
                             && let Some((marker, name)) =
                                 PC1_IMPLICIT_KEYS.iter().find(|(marker, _)| {
@@ -144,7 +162,9 @@ impl Parser<'_> {
                         } else {
                             children.len().to_string()
                         };
-                        children.push((key, self.value(depth + 1)?));
+                        let mut value = self.value(depth + 1)?;
+                        value.key_start = key_start;
+                        children.push((key, value));
                         if self.next() != Some(b',') {
                             break;
                         }
@@ -187,6 +207,7 @@ impl Parser<'_> {
         }
         Ok(Node {
             span: start..self.position,
+            key_start: start,
             children,
         })
     }
@@ -244,9 +265,7 @@ impl Field {
         game.protected(&self.path)
             || self.is_game_record(game)
             || (game == Game::Two
-                && [Collection::Buildings, Collection::DisabledResearch]
-                    .iter()
-                    .any(|collection| collection.matches(&self.path))
+                && Collection::Buildings.matches(&self.path)
                 && self.addition.is_none())
     }
 
@@ -337,6 +356,7 @@ pub struct Save {
     pub fields: Vec<Field>,
     pub snapshots: Vec<String>,
     pub latest: usize,
+    pub progress: Vec<Option<Progress>>,
     source: String,
     encoding: Encoding,
     original: Vec<u8>,
@@ -446,12 +466,14 @@ impl Save {
             };
         let mut fields = Vec::new();
         let mut snapshots = Vec::new();
+        let mut progress = Vec::new();
         for (index, (label, record)) in records.into_iter().enumerate() {
             visit_fields(record, &source, "", index, &mut fields);
             if game == Game::Two {
                 add_catalog_fields(record, &source, &mut fields);
             }
             snapshots.push(label);
+            progress.push(Progress::read(game, record, &source));
         }
         fields.sort_by_key(|field| field.range.start);
         let title = ["name", "cityName", "metadata.name", "metadata.cityName"]
@@ -471,6 +493,7 @@ impl Save {
             fields,
             snapshots,
             latest,
+            progress,
             source,
             encoding,
             original,
@@ -479,6 +502,12 @@ impl Save {
 
     pub fn changed(&self) -> usize {
         self.fields.iter().filter(|field| field.changed()).count()
+            + self
+                .progress
+                .iter()
+                .flatten()
+                .map(Progress::changed)
+                .sum::<usize>()
     }
 
     fn output(&self) -> Result<Vec<u8>> {
@@ -540,6 +569,14 @@ impl Save {
         replacements.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
         for (range, replacement) in replacements {
             text.replace_range(range, &replacement);
+        }
+        if self
+            .progress
+            .iter()
+            .flatten()
+            .any(|progress| progress.changed() > 0)
+        {
+            text = progress::apply(&text, self.game, &self.progress)?;
         }
         let encoded = match &self.encoding {
             Encoding::Plain => text.into_bytes(),
@@ -769,10 +806,8 @@ fn visit_fields(node: &Node, source: &str, prefix: &str, snapshot: usize, fields
 fn add_catalog_fields(root: &Node, source: &str, fields: &mut Vec<Field>) {
     for collection in Collection::ALL {
         let node = root.get(collection.key());
-        let can_create = (matches!(
-            collection,
-            Collection::Affinity | Collection::Buildings | Collection::DisabledResearch
-        ) || collection.is_resource_automation())
+        let can_create = (matches!(collection, Collection::Affinity | Collection::Buildings)
+            || collection.is_resource_automation())
             && root.get("FILE_ID").is_some();
         let (range, requires_comma, wrapper) = match node {
             Some(node) if source[node.span.clone()].starts_with('{') => {
@@ -788,13 +823,7 @@ fn add_catalog_fields(root: &Node, source: &str, fields: &mut Vec<Field>) {
             }
             _ => continue,
         };
-        let kind = if matches!(
-            collection,
-            Collection::Vehicles
-                | Collection::Research
-                | Collection::DisabledResearch
-                | Collection::Buildings
-        ) {
+        let kind = if matches!(collection, Collection::Vehicles | Collection::Buildings) {
             Kind::Boolean
         } else {
             Kind::Integer
@@ -804,11 +833,7 @@ fn add_catalog_fields(root: &Node, source: &str, fields: &mut Vec<Field>) {
             let path = format!("{}.{key}", collection.key());
             if let Some(field) = fields.iter_mut().find(|field| field.path == path) {
                 field.label = label.to_owned();
-                if matches!(
-                    collection,
-                    Collection::Buildings | Collection::DisabledResearch
-                ) && field.kind == Kind::Boolean
-                {
+                if collection == Collection::Buildings && field.kind == Kind::Boolean {
                     field.value = "true".to_owned();
                     field.initial.clone_from(&field.value);
                 }
@@ -987,6 +1012,7 @@ pub fn default_folders() -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use super::progress::{QuestState, ResearchState};
     use super::*;
 
     const PC1: &str = r#"{"AS":[{"timestamp":100,"metadata":{"name":"São Vicente"},"stats":{"money":42,"regions":[^2~""]},"grids":[{_x_{"_a_":1},_y_"_0_"}]}],"MS":[{"timestamp":200,"metadata":{"name":"Nova São Vicente"},"stats":{"money":51},"grids":[]}]}"#;
@@ -1266,6 +1292,135 @@ mod tests {
     }
 
     #[test]
+    fn pc1_progression_edits_one_snapshot_and_leaves_rewards_claimable() -> Result<()> {
+        let source = PC1.replace(
+            "\"money\":51",
+            "\"money\":51,\"globalSettings\":{\"chest_saved\":{\"10_12\":1}},\"activeQuests\":[1,2],\"newQuests\":[1],\"archivedQuests\":[3]",
+        );
+        let path = PathBuf::from("_city_test.save");
+        let mut save = Save::decode(path.clone(), source.as_bytes().to_vec())?;
+        let Some(Progress::Pc1(state)) = &mut save.progress[1] else {
+            anyhow::bail!("Missing PC1 progression")
+        };
+        assert_eq!(state.quest(1), Some(QuestState::Unread));
+        state.toggle_quest_claim(1);
+        assert_eq!(state.quest(1), Some(QuestState::Claimable));
+        state.toggle_quest_claim(1);
+        assert_eq!(state.quest(1), Some(QuestState::Unread));
+        assert_eq!(save.output()?, source.as_bytes());
+        let Some(Progress::Pc1(state)) = &mut save.progress[1] else {
+            unreachable!()
+        };
+        state.toggle_quest_claim(1);
+        state.toggle_quest_claim(3);
+        state.toggle_policy(1);
+        assert_eq!(state.policy(1), Some(false));
+        state.toggle_policy(0);
+        state.toggle_policy(1);
+        state.toggle_policy(0);
+        state.unlock_treasure(1);
+        save.fields
+            .iter_mut()
+            .find(|field| field.snapshot == 1 && field.path == "stats.money")
+            .context("Missing balance")?
+            .value = "52".to_owned();
+        let rewritten = Save::decode(path, save.output()?)?;
+        let Some(Progress::Pc1(edited)) = &rewritten.progress[1] else {
+            anyhow::bail!("Missing rewritten PC1 progression")
+        };
+        assert_eq!(edited.policy(0), Some(true));
+        assert_eq!(edited.policy(1), Some(true));
+        assert_eq!(edited.quest(1), Some(QuestState::Claimable));
+        assert_eq!(edited.quest(2), Some(QuestState::Active));
+        assert_eq!(edited.quest(3), Some(QuestState::Archived));
+        assert_eq!(edited.treasure(1), Some(true));
+        assert_eq!(rewritten.changed(), 0);
+        let (original_auto, _) = source.split_once(",\"MS\"").unwrap();
+        assert!(String::from_utf8(rewritten.output()?)?.starts_with(original_auto));
+        assert!(rewritten.source.contains("\"chest_saved\":{\"10_12\":1}"));
+        assert!(rewritten.source.contains("\"money\":52"));
+        assert!(rewritten.source.contains("\"newQuests\":[]"));
+        Ok(())
+    }
+
+    #[test]
+    fn pc2_research_presence_and_pet_following_round_trip_together() -> Result<()> {
+        let source = PC2.replace("\"level\":4", "\"level\":4,\"researchPoints\":50,\"researched\":{1:false,2:true,999: true,},\"disabledResearch\":{1:false,2:true,999: false,},\"pets\":{1:1,5:0},\"petStates\":{1:{\"wellBeing\":5,\"lastdayFed\":9,\"lastdayPet\":7},5:{\"wellBeing\":1}},\"eventCooldowns\":{1:0,2:25.7,999:4}");
+        let path = PathBuf::from("city_test.es3");
+        let mut save = Save::decode(path.clone(), source.into_bytes())?;
+        let Some(Progress::Pc2(state)) = &mut save.progress[0] else {
+            anyhow::bail!("Missing PC2 progression")
+        };
+        assert_eq!(state.research(1), Some(ResearchState::Disabled));
+        assert!(!state.can_set_research(1, ResearchState::Locked));
+        state.set_research(2, ResearchState::Locked);
+        state.set_research(1, ResearchState::Active);
+        state.set_pet(1, 11);
+        assert_eq!(state.pet(1), Some(5));
+        state.set_pet(1, 10);
+        state.toggle_follower(5);
+        assert_eq!(state.cooldown(1), Some((0.0, false)));
+        state.toggle_clear_cooldown(1);
+        state.toggle_clear_cooldown(2);
+        state.toggle_clear_cooldown(2);
+        let rewritten = Save::decode(path, save.output()?)?;
+        let Some(Progress::Pc2(edited)) = &rewritten.progress[0] else {
+            anyhow::bail!("Missing rewritten PC2 progression")
+        };
+        assert_eq!(edited.research(1), Some(ResearchState::Active));
+        assert_eq!(edited.research(2), Some(ResearchState::Locked));
+        assert_eq!(edited.pet(1), Some(10));
+        assert_eq!(edited.pet_following(1), Some(false));
+        assert_eq!(edited.pet_following(5), Some(true));
+        assert_eq!(edited.cooldown(1), None);
+        assert_eq!(edited.cooldown(2), Some((25.7, false)));
+        assert!(
+            rewritten
+                .source
+                .contains("\"researched\":{1:false,999: true}")
+        );
+        assert!(
+            rewritten
+                .source
+                .contains("\"disabledResearch\":{999: false}")
+        );
+        assert!(
+            rewritten
+                .source
+                .contains("\"lastdayFed\":9,\"lastdayPet\":7")
+        );
+        assert!(rewritten.source.contains("\"researchPoints\":50"));
+        assert!(
+            rewritten
+                .source
+                .contains("\"eventCooldowns\":{2:25.7,999:4}")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pc2_research_can_create_missing_and_null_dictionaries() -> Result<()> {
+        let path = PathBuf::from("city_test.es3");
+        let source = PC2.replace("\"level\":4", "\"level\":4,\"disabledResearch\":null");
+        let mut save = Save::decode(path.clone(), source.into_bytes())?;
+        let Some(Progress::Pc2(state)) = &mut save.progress[0] else {
+            anyhow::bail!("Missing PC2 progression")
+        };
+        assert!(!state.can_set_research(2, ResearchState::Active));
+        state.set_research(1, ResearchState::Disabled);
+        state.unlock_all_research();
+        let rewritten = Save::decode(path, save.output()?)?;
+        let Some(Progress::Pc2(edited)) = &rewritten.progress[0] else {
+            anyhow::bail!("Missing rewritten progression")
+        };
+        assert_eq!(edited.research(1), Some(ResearchState::Disabled));
+        for &(id, _) in crate::catalog::RESEARCH.iter().filter(|row| row.0 != 1) {
+            assert_eq!(edited.research(id), Some(ResearchState::Active));
+        }
+        Ok(())
+    }
+
+    #[test]
     #[ignore = "uses local Steam save fixtures specified by the environment"]
     fn real_steam_saves() -> Result<()> {
         let directory = tempfile::tempdir()?;
@@ -1319,6 +1474,18 @@ mod tests {
                             .with_context(|| format!("Missing {key}"))?
                             .value = (*value).to_owned();
                     }
+                    match opened.progress[latest].as_mut() {
+                        Some(Progress::Pc1(city)) => {
+                            city.unlock_treasure(1);
+                            if city.policy(0) == Some(false) {
+                                city.toggle_policy(0);
+                            }
+                        }
+                        Some(Progress::Pc2(city)) => {
+                            city.set_research(1, ResearchState::Active);
+                        }
+                        None => anyhow::bail!("Missing city progression"),
+                    }
                     let rewritten = opened.save()?;
                     assert!(rewritten.fields.iter().any(|field| field.snapshot == latest
                         && field.path == balance
@@ -1327,6 +1494,16 @@ mod tests {
                         assert!(rewritten.fields.iter().any(|field| field.snapshot == latest
                             && field.path == key
                             && field.value == value));
+                    }
+                    match rewritten.progress[latest].as_ref() {
+                        Some(Progress::Pc1(city)) => {
+                            assert_eq!(city.treasure(1), Some(true));
+                            assert_eq!(city.policy(0), Some(true));
+                        }
+                        Some(Progress::Pc2(city)) => {
+                            assert_eq!(city.research(1), Some(ResearchState::Active));
+                        }
+                        None => anyhow::bail!("Missing rewritten city progression"),
                     }
                     let backup = rewritten.backups()?.pop().context("No original backup")?;
                     assert_eq!(fs::read(&backup)?, original);

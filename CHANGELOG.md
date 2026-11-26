@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Added a Progression tab with Pocket City chest rewards, city policies, and quest objectives ready for in-game reward collection.
+- Added Pocket City 2 research states, adopted pet well-being and follower controls, and per-event cooldown removal.
+
 ## 2.0.0
 
 - Rebuilt the desktop editor in Rust with egui and eframe.

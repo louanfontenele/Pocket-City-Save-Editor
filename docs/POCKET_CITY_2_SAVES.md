@@ -32,7 +32,7 @@ Direct edits to balance, XP, level, research and `forceUnlockedBuildings` do not
 ## Additional collection semantics
 
 - `resourceAutoSellKeepAmt` and `resourceAutoConvertKeepAmt` use a resource ID as the key and the stock amount to keep as the value. A missing key or value of `-1` disables the rule. Automation can edit a dictionary that is absent or empty in older saves.
-- `disabledResearch` tests key presence. Values stored as `false` still disable the research. The editor can add a disabled entry and shows saved disabled entries as protected.
+- `researched` and `disabledResearch` both test key presence. The Progression tab pairs the dictionaries into locked, active, and unlocked with the effect disabled. The editor removes the disable key when enabling the effect. In legacy files it creates an empty disable dictionary as needed because the game reads it when testing active effects.
 - `upgradesSpentCity` is separate from the global `upgradesSpent` dictionary. The city loader indexes available upgrade actions using the stored tier minus one, so city entries must use positive tiers. The editor exposes existing entries using the known per-upgrade limits.
 - `Tooltips.TooltipScreen.CheckShow` treats a tooltip as recorded when its ID is present in either `globalFlags` or the city's `flags`. The stored Boolean is ignored for this check. IDs 20, 22 and 24 correspond to elevated rail construction, rail commuters from outside the city, and disaster reports and repairs respectively. The editor shows these entries as recorded tips with a short description and protects the internal flags from Boolean edits.
 

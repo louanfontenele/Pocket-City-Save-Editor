@@ -3,6 +3,7 @@
 mod catalog;
 mod editor;
 mod locale;
+mod progression_catalog;
 mod save;
 
 fn main() -> eframe::Result {
